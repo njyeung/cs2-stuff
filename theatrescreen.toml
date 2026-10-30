@@ -8,6 +8,15 @@ version = "latest"
 from = "TheatreScreen"
 to = "addons/counterstrikesharp/plugins/TheatreScreen"
 
+# TheatreVoice: the Metamod plugin that posts the voice messages TheatreScreen builds.
+[[layout]]
+from = "theatrevoice"
+to = "addons/theatrevoice"
+
+[[layout]]
+from = "metamod"
+to = "addons/metamod"
+
 [[template]]
 path = "addons/counterstrikesharp/configs/plugins/TheatreScreen/TheatreScreen.json"
 body = '''

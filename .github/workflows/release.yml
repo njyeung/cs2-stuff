@@ -19,13 +19,30 @@ jobs:
         with:
           dotnet-version: 10.0.x
 
-      - name: Check stream protocol
-        run: dotnet run --project tests/VideoStreamChecks -c Release
+      - name: Check stream protocol and voice messages
+        run: |
+          dotnet run --project tests/VideoStreamChecks -c Release
+          dotnet run --project tests/VoiceDataChecks -c Release
+
+      # Pinned to the commits TheatreVoice was built and checked against;
+      # Metamod 2.0.0-dev+1483 is the build installed on the servers.
+      - name: Fetch hl2sdk and Metamod:Source
+        run: |
+          fetch() { git init -q "$1" && git -C "$1" fetch -q --depth 1 "$2" "$3" && git -C "$1" checkout -q FETCH_HEAD; }
+          fetch deps/hl2sdk-cs2 https://github.com/alliedmodders/hl2sdk.git 3f4110dce3060b352d49bf100f1a43f7705aab06
+          fetch deps/mmsource https://github.com/alliedmodders/metamod-source.git 170058a2f0dbd58106b7c76bfe88a94672295356
+          git -C deps/mmsource submodule update -q --init --depth 1 third_party/khook third_party/amtl
+
+      - name: Build TheatreVoice
+        run: |
+          docker run --rm --user "$(id -u):$(id -g)" -v "$PWD":/src -w /src \
+            registry.gitlab.steamos.cloud/steamrt/sniper/sdk:latest \
+            theatre-voice/build.sh deps/hl2sdk-cs2 deps/mmsource out
 
       - name: Build
         run: |
           dotnet publish TheatreScreen/TheatreScreen.csproj -c Release -o out/TheatreScreen
-          cd out && zip -r TheatreScreen.zip TheatreScreen
+          cd out && zip -r TheatreScreen.zip TheatreScreen theatrevoice metamod
 
       - name: Release
         env:

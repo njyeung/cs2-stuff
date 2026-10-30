@@ -2,7 +2,6 @@ using System.Drawing;
 using CounterStrikeSharp.API;
 using CounterStrikeSharp.API.Core;
 using CounterStrikeSharp.API.Modules.Commands;
-using CounterStrikeSharp.API.Modules.Utils;
 using Microsoft.Extensions.Logging;
 
 namespace TheatreScreen;
@@ -11,7 +10,7 @@ namespace TheatreScreen;
 public sealed class TheatreScreenPlugin : BasePlugin, IPluginConfig<TheatreScreenConfig>
 {
     public override string ModuleName => "TheatreScreen";
-    public override string ModuleVersion => "0.5.4";
+    public override string ModuleVersion => "0.6.0";
     public override string ModuleAuthor => "cs2-server";
     public override string ModuleDescription => "Entity-pixel video screen rendered entirely server-side.";
 
@@ -20,6 +19,7 @@ public sealed class TheatreScreenPlugin : BasePlugin, IPluginConfig<TheatreScree
     private VideoStream? _stream;
     private VideoFrame? _shownStreamFrame;
     private VoiceTest? _voiceTest;
+    private TheatreVoice? _theatreVoice;
     private bool _loaded;
 
     public void OnConfigParsed(TheatreScreenConfig config) => Config = config;
@@ -64,6 +64,8 @@ public sealed class TheatreScreenPlugin : BasePlugin, IPluginConfig<TheatreScree
     {
         _loaded = false;
         _voiceTest?.Stop();
+        _theatreVoice?.Dispose();
+        _theatreVoice = null;
         StopPlayback();
         ClearScreen();
     }
@@ -119,10 +121,17 @@ public sealed class TheatreScreenPlugin : BasePlugin, IPluginConfig<TheatreScree
         var batch = info.ArgCount > 2 && int.TryParse(info.GetArg(2), out var n) ? n : 3;
         // Defaults to the speaker's controller index (slot + 1); -1 leaves the field unset.
         var entity = info.ArgCount > 3 && int.TryParse(info.GetArg(3), out var e) ? e : speaker + 1;
-        var recipients = new RecipientFilter();
-        foreach (var human in humans)
-            recipients.Add(human);
-        var summary = _voiceTest!.Start(speaker, entity, recipients, batch);
+        if (_theatreVoice == null)
+        {
+            var path = Path.Combine(ModuleDirectory, "..", "..", "..", "theatrevoice", "bin", "theatrevoice.so");
+            if (!TheatreVoice.TryAttach(path, out _theatreVoice, out var attachError))
+            {
+                info.ReplyToCommand($" [Screen] {attachError}");
+                return;
+            }
+        }
+        var recipients = humans.Aggregate(0UL, (mask, human) => mask | 1UL << human.Slot);
+        var summary = _voiceTest!.Start(_theatreVoice!, speaker, entity, recipients, batch);
         Logger.LogInformation("Voice test started by {player}: {summary}", player?.PlayerName ?? "server console", summary);
         info.ReplyToCommand($" [Screen] Voice test: {summary}");
     }

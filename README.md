@@ -44,7 +44,7 @@ The plugin queues a black screen on load and map start and rebuilds after round
 cleanup. Keep `Backdrop` enabled because black beam pixels alone are transparent.
 The cube model is precached during map loading: after installing a new plugin,
 restart the server or change the map to ensure the black backdrop is available.
-Look for `[TheatreScreen] v0.5.2 loaded` in the server console and `Spawned black`
+Look for `[TheatreScreen] v0.6.0 loaded` in the server console and `Spawned black`
 in the plugin log. Invalid JSON (including an extra quote on a key) prevents the
 plugin from loading at all; validate the JSON inside the TOML template too.
 
@@ -56,14 +56,35 @@ uncompressed.
 Frames have no timestamps or per-frame headers. Each request starts at a fresh
 header; EOF closes that session without replaying it. Audio is not part of this protocol.
 
+### Voice (experimental)
+
+Audio will play through the voice channel without ffmpeg on the game server.
+CounterStrikeSharp cannot set the nested protobuf fields of `CSVCMsg_VoiceData`, so
+the plugin serializes the message itself (`VoiceData.cs`) and hands the bytes to
+`TheatreVoice`, a minimal Metamod plugin in `theatre-voice/`. It parses them into the
+game's message object and posts it on the voice channel to a mask of player slots;
+it knows nothing about Opus. The release zip carries it as `theatrevoice/` and
+`metamod/theatrevoice.vdf`, which `theatrescreen.toml` installs under `addons/`.
+Check `meta list` for TheatreVoice after a restart.
+
+`css_screenvoicetest [speaker slot] [packets per message] [entity index]` sends an
+embedded two-second tone as 10 ms Opus packets to every human player. The speaker
+defaults to the first bot, else the caller; the entity index defaults to slot + 1,
+and `-1` leaves that field unset.
+
 ### Build
 
 ```sh
 dotnet publish TheatreScreen/TheatreScreen.csproj -c Release -o out/TheatreScreen
 ```
 
-Run the stream protocol and HTTP lifecycle checks with:
+Run the stream protocol, HTTP lifecycle and voice message checks with:
 
 ```sh
 dotnet run --project tests/VideoStreamChecks -c Release
+dotnet run --project tests/VoiceDataChecks -c Release
 ```
+
+TheatreVoice builds in the Steam Runtime sniper SDK against hl2sdk (`cs2` branch) and
+Metamod:Source checkouts; see `theatre-voice/build.sh` and the release workflow for
+the pinned commits.
