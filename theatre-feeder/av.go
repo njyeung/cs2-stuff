@@ -47,7 +47,8 @@ func serveAV(w http.ResponseWriter, r *http.Request) {
 	vf := fmt.Sprintf("fps=%d,scale=%d:%d:force_original_aspect_ratio=decrease:flags=area,pad=%d:%d:(ow-iw)/2:(oh-ih)/2,setsar=1", fps, width, height, width, height)
 	p, err := startPipelineOutputs(src, *avFormat, aw,
 		"-map", "0:v:0", "-an", "-sn", "-vf", vf, "-pix_fmt", "rgb24", "-f", "rawvideo", "pipe:1",
-		"-map", "0:a:0", "-vn", "-sn", "-c:a", "libopus", "-frame_duration", "10", "-application", "audio", "-ac", "1", "-ar", "48000", "-b:a", "64k", "-f", "ogg", "-page_duration", "10000", "-flush_packets", "1", "pipe:3")
+		// Reduce sample amplitude before encoding.
+		"-map", "0:a:0", "-vn", "-sn", "-af", "volume=0.5", "-c:a", "libopus", "-frame_duration", "10", "-application", "audio", "-ac", "1", "-ar", "48000", "-b:a", "64k", "-f", "ogg", "-page_duration", "10000", "-flush_packets", "1", "pipe:3")
 	aw.Close()
 	if err != nil {
 		http.Error(w, err.Error(), 500)

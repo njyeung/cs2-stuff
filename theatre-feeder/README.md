@@ -15,6 +15,7 @@ Dimensions are 1–256 and FPS is 1–30. Records follow in arrival order:
 
 Indices start at zero independently per track. Video time is index / FPS;
 audio time is index × 10 ms. Opus is 48 kHz mono, 64 kbps, 10 ms frames.
+Audio is attenuated to 50% amplitude (about −6 dB) before Opus encoding.
 OpusHead and OpusTags are removed. Clients should buffer and pace both tracks
 by these times. Opus encoder pre-skip and final padding are not represented;
 this protocol has packet-level timing rather than sample-exact trimming.
