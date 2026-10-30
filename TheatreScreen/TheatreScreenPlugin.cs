@@ -11,7 +11,7 @@ namespace TheatreScreen;
 public sealed class TheatreScreenPlugin : BasePlugin, IPluginConfig<TheatreScreenConfig>
 {
     public override string ModuleName => "TheatreScreen";
-    public override string ModuleVersion => "0.5.3";
+    public override string ModuleVersion => "0.5.4";
     public override string ModuleAuthor => "cs2-server";
     public override string ModuleDescription => "Entity-pixel video screen rendered entirely server-side.";
 
@@ -47,7 +47,7 @@ public sealed class TheatreScreenPlugin : BasePlugin, IPluginConfig<TheatreScree
             Server.PrintToChatAll($" [Screen] Voice test {message.Split('\n')[0]}");
         });
         RegisterListener<Listeners.OnTick>(_voiceTest.Tick);
-        AddCommand("css_screenvoicetest", "Experiment: send a 2 s Opus tone as voice data: [speaker slot] [packets per message]", OnVoiceTest);
+        AddCommand("css_screenvoicetest", "Experiment: send a 2 s Opus tone as voice data: [speaker slot] [packets per message] [entity index]", OnVoiceTest);
         Logger.LogInformation("TheatreScreen {version} loaded; starting black, use !play <YouTube URL>. Feeder: {feeder}",
             ModuleVersion, Config.FeederUrl);
         Server.PrintToConsole($"[TheatreScreen] v{ModuleVersion} loaded. Use !play <YouTube URL>; feeder {Config.FeederUrl}");
@@ -103,7 +103,7 @@ public sealed class TheatreScreenPlugin : BasePlugin, IPluginConfig<TheatreScree
         {
             if (!int.TryParse(info.GetArg(1), out speaker))
             {
-                info.ReplyToCommand(" [Screen] Usage: css_screenvoicetest [speaker slot] [packets per message]");
+                info.ReplyToCommand(" [Screen] Usage: css_screenvoicetest [speaker slot] [packets per message] [entity index, -1 for none]");
                 return;
             }
         }
@@ -117,10 +117,12 @@ public sealed class TheatreScreenPlugin : BasePlugin, IPluginConfig<TheatreScree
             return;
         }
         var batch = info.ArgCount > 2 && int.TryParse(info.GetArg(2), out var n) ? n : 3;
+        // Defaults to the speaker's controller index (slot + 1); -1 leaves the field unset.
+        var entity = info.ArgCount > 3 && int.TryParse(info.GetArg(3), out var e) ? e : speaker + 1;
         var recipients = new RecipientFilter();
         foreach (var human in humans)
             recipients.Add(human);
-        var summary = _voiceTest!.Start(speaker, recipients, batch);
+        var summary = _voiceTest!.Start(speaker, entity, recipients, batch);
         Logger.LogInformation("Voice test started by {player}: {summary}", player?.PlayerName ?? "server console", summary);
         info.ReplyToCommand($" [Screen] Voice test: {summary}");
     }

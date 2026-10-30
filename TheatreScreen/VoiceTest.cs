@@ -16,22 +16,24 @@ public sealed class VoiceTest(Action<string> report)
     private static uint _section;
 
     private RecipientFilter? _recipients;
-    private int _speaker, _batch, _messageId, _sent, _messages;
+    private int _speaker, _entity, _batch, _messageId, _sent, _messages;
     private long _started;
 
     public bool Running => _recipients != null;
 
-    public string Start(int speakerSlot, RecipientFilter recipients, int batch)
+    /// <param name="entity">Speaker's entity index for the newer "entity" field; -1 leaves it unset.</param>
+    public string Start(int speakerSlot, int entity, RecipientFilter recipients, int batch)
     {
         _messageId = UserMessage.FindIdByName("CSVCMsg_VoiceData");
         if (_messageId <= 0) _messageId = 47; // CS2's id for CSVCMsg_VoiceData, as the Audio extension uses.
         _speaker = speakerSlot;
+        _entity = entity;
         _batch = Math.Clamp(batch, 1, 8);
         _recipients = recipients;
         _sent = _messages = 0;
         _section++;
         _started = Stopwatch.GetTimestamp();
-        return $"message id {_messageId}, speaker slot {_speaker}, {recipients.Count} recipients, " +
+        return $"message id {_messageId}, speaker slot {_speaker}, entity {_entity}, {recipients.Count} recipients, " +
                $"{Tone.Length} packets, {_batch} per message";
     }
 
@@ -65,18 +67,32 @@ public sealed class VoiceTest(Action<string> report)
     {
         using var message = UserMessage.FromId(_messageId);
         var data = Tone.Skip(first).Take(count).SelectMany(packet => packet).ToArray();
-        message.SetInt("client", _speaker);
-        message.SetUInt64("xuid", 0);
-        message.SetInt("audio.format", 2); // VOICEDATA_FORMAT_OPUS
-        message.SetBytes("audio.voice_data", data);
-        message.SetInt("audio.sequence_bytes", 0);
-        message.SetUInt("audio.section_number", _section);
-        message.SetUInt("audio.sample_rate", 48000);
-        message.SetUInt("audio.num_packets", (uint)count);
-        var end = 0;
-        for (var i = first; i < first + count; i++)
-            message.AddUInt("audio.packet_offsets", (uint)(end += Tone[i].Length));
-        message.SetFloat("audio.voice_level", 0.5f);
+        // Every field is attempted so one run reports all the fields CounterStrikeSharp rejects.
+        var rejected = new List<string>();
+        void Set(string field, Action<string> set)
+        {
+            try { set(field); }
+            catch (Exception ex) { rejected.Add($"{field}: {ex.Message}"); }
+        }
+        // Current CS2 renamed "client" (still field 2) and added "entity"; the Audio extension sets only field 2.
+        Set("client_deprecated", f => message.SetInt(f, _speaker));
+        if (_entity >= 0) Set("entity", f => message.SetInt(f, _entity));
+        Set("xuid", f => message.SetUInt64(f, 0));
+        Set("audio.format", f => message.SetInt(f, 2)); // VOICEDATA_FORMAT_OPUS
+        Set("audio.voice_data", f => message.SetBytes(f, data));
+        Set("audio.sequence_bytes", f => message.SetInt(f, 0));
+        Set("audio.section_number", f => message.SetUInt(f, _section));
+        Set("audio.sample_rate", f => message.SetUInt(f, 48000));
+        Set("audio.num_packets", f => message.SetUInt(f, (uint)count));
+        Set("audio.packet_offsets", f =>
+        {
+            var end = 0;
+            for (var i = first; i < first + count; i++)
+                message.AddUInt(f, (uint)(end += Tone[i].Length));
+        });
+        Set("audio.voice_level", f => message.SetFloat(f, 0.5f));
+        if (rejected.Count > 0)
+            throw new InvalidOperationException("rejected fields: " + string.Join("; ", rejected));
         if (_messages == 0)
             report($"first message ({message.Name}):\n{message.DebugString}");
         message.Send(recipients);
