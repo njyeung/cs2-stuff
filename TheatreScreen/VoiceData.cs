@@ -13,15 +13,20 @@ public static class VoiceData
     /// <param name="speakerSlot">Player slot the voice appears to come from (client_deprecated).</param>
     /// <param name="entity">Speaker's entity index; negative leaves the field unset.</param>
     /// <param name="section">Identifies one continuous stream; change it when a new one starts.</param>
+    /// <param name="sequenceBytes">Opus bytes sent earlier in this section (the Audio extension always sends 0).</param>
+    /// <param name="sampleOffset">Samples sent earlier in this section; null leaves it unset, as the Audio extension does.</param>
     /// <param name="packets">Consecutive Opus packets sent together in this message.</param>
-    public static byte[] Build(int speakerSlot, int entity, uint section, IReadOnlyList<byte[]> packets, float voiceLevel = 0.5f)
+    public static byte[] Build(int speakerSlot, int entity, uint section, int sequenceBytes, uint? sampleOffset,
+        IReadOnlyList<byte[]> packets, float voiceLevel = 0.5f)
     {
         var audio = new ProtoWriter();
         audio.Varint(1, FormatOpus);
         audio.Bytes(2, packets.SelectMany(packet => packet).ToArray());
-        audio.Varint(3, 0); // sequence_bytes, which the Audio extension also leaves at 0
+        audio.Varint(3, (ulong)(long)sequenceBytes);
         audio.Varint(4, section);
         audio.Varint(5, SampleRate);
+        if (sampleOffset is { } offset)
+            audio.Varint(6, offset); // uncompressed_sample_offset
         audio.Varint(7, (ulong)packets.Count);
         var offsets = new ProtoWriter();
         var end = 0;

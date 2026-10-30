@@ -44,7 +44,7 @@ The plugin queues a black screen on load and map start and rebuilds after round
 cleanup. Keep `Backdrop` enabled because black beam pixels alone are transparent.
 The cube model is precached during map loading: after installing a new plugin,
 restart the server or change the map to ensure the black backdrop is available.
-Look for `[TheatreScreen] v0.6.0 loaded` in the server console and `Spawned black`
+Look for `[TheatreScreen] v0.6.1 loaded` in the server console and `Spawned black`
 in the plugin log. Invalid JSON (including an extra quote on a key) prevents the
 plugin from loading at all; validate the JSON inside the TOML template too.
 
@@ -67,10 +67,17 @@ it knows nothing about Opus. The release zip carries it as `theatrevoice/` and
 `metamod/theatrevoice.vdf`, which `theatrescreen.toml` installs under `addons/`.
 Check `meta list` for TheatreVoice after a restart.
 
-`css_screenvoicetest [speaker slot] [packets per message] [entity index]` sends an
-embedded two-second tone as 10 ms Opus packets to every human player. The speaker
-defaults to the first bot, else the caller; the entity index defaults to slot + 1,
-and `-1` leaves that field unset.
+`css_screenvoicetest [speaker slot] [packets per message] [entity index] [sequenced]`
+sends an embedded two-second tone as 10 ms Opus packets to every human player. The
+speaker defaults to the first bot, else the caller; the entity index defaults to
+slot + 1, and `-1` leaves that field unset. By default `sequence_bytes` and
+`uncompressed_sample_offset` carry running totals; `0` sends them as the Audio
+extension does (0 and unset).
+
+`css_screenvoicelog [count]` prints the fields of the next voice messages the server
+sends (default 6), without the audio bytes, to the plugin log and chat. Run it before
+the test, or while a player talks (`voice_loopback 1` echoes your own voice), to
+compare TheatreScreen's messages with a real client's.
 
 ### Build
 

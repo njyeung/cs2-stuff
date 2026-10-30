@@ -2,6 +2,7 @@ using System.Drawing;
 using CounterStrikeSharp.API;
 using CounterStrikeSharp.API.Core;
 using CounterStrikeSharp.API.Modules.Commands;
+using CounterStrikeSharp.API.Modules.UserMessages;
 using Microsoft.Extensions.Logging;
 
 namespace TheatreScreen;
@@ -10,7 +11,7 @@ namespace TheatreScreen;
 public sealed class TheatreScreenPlugin : BasePlugin, IPluginConfig<TheatreScreenConfig>
 {
     public override string ModuleName => "TheatreScreen";
-    public override string ModuleVersion => "0.6.0";
+    public override string ModuleVersion => "0.6.1";
     public override string ModuleAuthor => "cs2-server";
     public override string ModuleDescription => "Entity-pixel video screen rendered entirely server-side.";
 
@@ -20,6 +21,7 @@ public sealed class TheatreScreenPlugin : BasePlugin, IPluginConfig<TheatreScree
     private VideoFrame? _shownStreamFrame;
     private VoiceTest? _voiceTest;
     private TheatreVoice? _theatreVoice;
+    private int _voiceLogRemaining;
     private bool _loaded;
 
     public void OnConfigParsed(TheatreScreenConfig config) => Config = config;
@@ -47,7 +49,13 @@ public sealed class TheatreScreenPlugin : BasePlugin, IPluginConfig<TheatreScree
             Server.PrintToChatAll($" [Screen] Voice test {message.Split('\n')[0]}");
         });
         RegisterListener<Listeners.OnTick>(_voiceTest.Tick);
-        AddCommand("css_screenvoicetest", "Experiment: send a 2 s Opus tone as voice data: [speaker slot] [packets per message] [entity index]", OnVoiceTest);
+        AddCommand("css_screenvoicetest", "Experiment: send a 2 s Opus tone as voice data: [speaker slot] [packets per message] [entity index] [sequenced 1/0]", OnVoiceTest);
+        HookUserMessage(VoiceData.MessageId, LogVoiceMessage);
+        AddCommand("css_screenvoicelog", "Print the fields of the next N voice messages the server sends (default 6)", (_, info) =>
+        {
+            _voiceLogRemaining = info.ArgCount > 1 && int.TryParse(info.GetArg(1), out var count) ? count : 6;
+            info.ReplyToCommand($" [Screen] Logging the next {_voiceLogRemaining} voice messages.");
+        });
         Logger.LogInformation("TheatreScreen {version} loaded; starting black, use !play <YouTube URL>. Feeder: {feeder}",
             ModuleVersion, Config.FeederUrl);
         Server.PrintToConsole($"[TheatreScreen] v{ModuleVersion} loaded. Use !play <YouTube URL>; feeder {Config.FeederUrl}");
@@ -105,7 +113,7 @@ public sealed class TheatreScreenPlugin : BasePlugin, IPluginConfig<TheatreScree
         {
             if (!int.TryParse(info.GetArg(1), out speaker))
             {
-                info.ReplyToCommand(" [Screen] Usage: css_screenvoicetest [speaker slot] [packets per message] [entity index, -1 for none]");
+                info.ReplyToCommand(" [Screen] Usage: css_screenvoicetest [speaker slot] [packets per message] [entity index, -1 for none] [0 for Audio-style zero offsets]");
                 return;
             }
         }
@@ -121,6 +129,7 @@ public sealed class TheatreScreenPlugin : BasePlugin, IPluginConfig<TheatreScree
         var batch = info.ArgCount > 2 && int.TryParse(info.GetArg(2), out var n) ? n : 3;
         // Defaults to the speaker's controller index (slot + 1); -1 leaves the field unset.
         var entity = info.ArgCount > 3 && int.TryParse(info.GetArg(3), out var e) ? e : speaker + 1;
+        var sequenced = info.ArgCount <= 4 || info.GetArg(4) != "0";
         if (_theatreVoice == null)
         {
             var path = Path.Combine(ModuleDirectory, "..", "..", "..", "theatrevoice", "bin", "theatrevoice.so");
@@ -131,9 +140,22 @@ public sealed class TheatreScreenPlugin : BasePlugin, IPluginConfig<TheatreScree
             }
         }
         var recipients = humans.Aggregate(0UL, (mask, human) => mask | 1UL << human.Slot);
-        var summary = _voiceTest!.Start(_theatreVoice!, speaker, entity, recipients, batch);
+        var summary = _voiceTest!.Start(_theatreVoice!, speaker, entity, recipients, batch, sequenced);
         Logger.LogInformation("Voice test started by {player}: {summary}", player?.PlayerName ?? "server console", summary);
         info.ReplyToCommand($" [Screen] Voice test: {summary}");
+    }
+
+    /// <summary>Prints voice messages as the game parsed them, minus the audio bytes, to compare ours with real clients'.</summary>
+    private HookResult LogVoiceMessage(UserMessage message)
+    {
+        if (_voiceLogRemaining <= 0) return HookResult.Continue;
+        _voiceLogRemaining--;
+        var fields = message.DebugString.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Where(line => !line.StartsWith("voice_data:"));
+        var summary = string.Join(' ', fields);
+        Logger.LogInformation("Voice message: {fields}", summary);
+        Server.PrintToChatAll($" [Screen] VoiceData: {summary}");
+        return HookResult.Continue;
     }
 
     private void DrawVideoFrame()

@@ -8,28 +8,35 @@ namespace TheatreScreen;
 /// </summary>
 public sealed class VoiceTest(Action<string> report)
 {
-    private const int FrameMs = 10; // 480 samples at 48 kHz, as the embedded packets were encoded.
+    private const int FrameMs = 10; // As the embedded packets were encoded.
+    private const int FrameSamples = 480; // 10 ms at 48 kHz.
     private const int LeadPackets = 3; // Sent ahead of the clock so the client never starves.
     private static readonly byte[][] Tone = LoadTone();
     private static uint _section;
 
     private TheatreVoice? _voice;
     private ulong _recipients;
-    private int _speaker, _entity, _batch, _sent, _messages;
+    private bool _sequenced;
+    private int _speaker, _entity, _batch, _sent, _sentBytes, _messages;
     private long _started;
 
-    public string Start(TheatreVoice voice, int speakerSlot, int entity, ulong recipients, int batch)
+    /// <param name="sequenced">
+    /// Fill sequence_bytes and uncompressed_sample_offset with running totals; otherwise send
+    /// them as the Audio extension does (0 and unset).
+    /// </param>
+    public string Start(TheatreVoice voice, int speakerSlot, int entity, ulong recipients, int batch, bool sequenced)
     {
         _voice = voice;
         _speaker = speakerSlot;
         _entity = entity;
         _batch = Math.Clamp(batch, 1, 8);
         _recipients = recipients;
-        _sent = _messages = 0;
+        _sequenced = sequenced;
+        _sent = _sentBytes = _messages = 0;
         _section++;
         _started = Stopwatch.GetTimestamp();
         return $"speaker slot {_speaker}, entity {_entity}, recipients 0x{recipients:x}, " +
-               $"{Tone.Length} packets, {_batch} per message";
+               $"{Tone.Length} packets, {_batch} per message, {(sequenced ? "sequenced" : "Audio-style zero")} offsets";
     }
 
     public void Stop() => _voice = null;
@@ -43,11 +50,15 @@ public sealed class VoiceTest(Action<string> report)
             while (_sent < due)
             {
                 var count = Math.Min(_batch, due - _sent);
-                var data = VoiceData.Build(_speaker, _entity, _section, Tone[_sent..(_sent + count)]);
+                var packets = Tone[_sent..(_sent + count)];
+                var data = _sequenced
+                    ? VoiceData.Build(_speaker, _entity, _section, _sentBytes, (uint)(_sent * FrameSamples), packets)
+                    : VoiceData.Build(_speaker, _entity, _section, 0, null, packets);
                 voice.Post(VoiceData.MessageId, data, _recipients);
                 if (_messages++ == 0)
                     report($"first message posted: {data.Length} bytes");
                 _sent += count;
+                _sentBytes += packets.Sum(packet => packet.Length);
             }
         }
         catch (Exception ex)
