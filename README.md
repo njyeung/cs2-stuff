@@ -4,10 +4,10 @@
 
 A CounterStrikeSharp plugin that loops the bundled Rickroll video on a screen
 made from server-side pixel entities. Playback starts on round start and on hot
-reload, at 64×36 and 10 FPS with the default configuration. No commands are needed.
+reload, at 96×54 and 15 FPS with the default configuration. No commands are needed.
 The clip is silent; audio playback is not implemented.
 
-All 76 frames are compressed and embedded in `TheatreScreen.dll`. The server needs
+All 114 frames are compressed and embedded in `TheatreScreen.dll`. The server needs
 neither FFmpeg nor the source WebM. The screen's position, pixel primitive, and
 backdrop are configured through the usual CounterStrikeSharp plugin config.
 

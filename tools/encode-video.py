@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""Convert the source clip to the embedded 64x36, 10 FPS RGB frame stream."""
+"""Convert the source clip to the embedded 96x54, 15 FPS RGB frame stream."""
 from pathlib import Path
 import gzip
 import struct
 import subprocess
 
 root = Path(__file__).resolve().parents[1]
-width, height, fps = 64, 36, 10
+width, height, fps = 96, 54, 15
 frames = subprocess.check_output([
     'ffmpeg', '-v', 'error', '-i', str(root / 'rickroll.webm'),
     '-an', '-vf', f'fps={fps},scale={width}:{height}:flags=area',

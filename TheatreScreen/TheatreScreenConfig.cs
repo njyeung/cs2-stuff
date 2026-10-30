@@ -28,8 +28,8 @@ public sealed class TheatreScreenConfig : BasePluginConfig
     [JsonPropertyName("Elevation")] public float Elevation { get; set; } = 24f;
 
     /// <summary>Resolution. Pixels are square, so height = width * Rows / Columns.</summary>
-    [JsonPropertyName("Columns")] public int Columns { get; set; } = 64;
-    [JsonPropertyName("Rows")] public int Rows { get; set; } = 36;
+    [JsonPropertyName("Columns")] public int Columns { get; set; } = 96;
+    [JsonPropertyName("Rows")] public int Rows { get; set; } = 54;
 
     /// <summary>Black wall behind the pixels, overhanging by <see cref="Bezel"/> units.
     /// Beams are additive, so without it they look like tinted glass.</summary>

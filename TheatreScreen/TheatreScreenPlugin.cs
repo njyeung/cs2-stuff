@@ -7,12 +7,12 @@ namespace TheatreScreen;
 /// <summary>
 /// Server-side "theatre screen": a wall of stock entities used as pixels, so clients
 /// need no downloads. The screen is always up — rebuilt every round start, since the
-/// round's map cleanup wipes plugin-spawned entities. Embedded video loops at 10 FPS.
+/// round's map cleanup wipes plugin-spawned entities. Embedded video loops at 15 FPS.
 /// </summary>
 public sealed class TheatreScreenPlugin : BasePlugin, IPluginConfig<TheatreScreenConfig>
 {
     public override string ModuleName => "TheatreScreen";
-    public override string ModuleVersion => "0.2.0";
+    public override string ModuleVersion => "0.3.0";
     public override string ModuleAuthor => "cs2-server";
     public override string ModuleDescription => "Entity-pixel screen rendered entirely server-side.";
 

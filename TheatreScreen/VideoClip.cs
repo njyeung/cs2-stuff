@@ -24,7 +24,7 @@ public sealed class VideoClip
         Height = reader.ReadInt32();
         FramesPerSecond = reader.ReadInt32();
         FrameCount = reader.ReadInt32();
-        if (Width != 64 || Height != 36 || FramesPerSecond != 10 || FrameCount <= 0)
+        if (Width != 96 || Height != 54 || FramesPerSecond != 15 || FrameCount <= 0)
             throw new InvalidDataException("Invalid embedded video dimensions or timing.");
         _pixels = new Color[checked(Width * Height * FrameCount)];
         for (var i = 0; i < _pixels.Length; i++)
