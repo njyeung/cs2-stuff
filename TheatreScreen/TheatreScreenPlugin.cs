@@ -1,8 +1,8 @@
 using System.Drawing;
+using System.Diagnostics;
 using CounterStrikeSharp.API;
 using CounterStrikeSharp.API.Core;
 using CounterStrikeSharp.API.Modules.Commands;
-using CounterStrikeSharp.API.Modules.UserMessages;
 using Microsoft.Extensions.Logging;
 
 namespace TheatreScreen;
@@ -11,17 +11,21 @@ namespace TheatreScreen;
 public sealed class TheatreScreenPlugin : BasePlugin, IPluginConfig<TheatreScreenConfig>
 {
     public override string ModuleName => "TheatreScreen";
-    public override string ModuleVersion => "0.6.1";
+    public override string ModuleVersion => "0.7.0";
     public override string ModuleAuthor => "cs2-server";
     public override string ModuleDescription => "Entity-pixel video screen rendered entirely server-side.";
 
     public TheatreScreenConfig Config { get; set; } = new();
     private Screen? _screen;
-    private VideoStream? _stream;
+    private AvStream? _stream;
+    private AvPlayback? _playback;
+    private long _lastTick;
+    private long _lastAudioProgress;
+    private int _speaker;
+    private uint _voiceSection;
+    private ulong _muted;
     private VideoFrame? _shownStreamFrame;
-    private VoiceTest? _voiceTest;
     private TheatreVoice? _theatreVoice;
-    private int _voiceLogRemaining;
     private bool _loaded;
 
     public void OnConfigParsed(TheatreScreenConfig config) => Config = config;
@@ -42,23 +46,21 @@ public sealed class TheatreScreenPlugin : BasePlugin, IPluginConfig<TheatreScree
             SpawnScreen();
             return HookResult.Continue;
         });
-        AddCommand("css_play", "Play a YouTube video on the screen: !play <url>", OnPlay);
-        _voiceTest = new VoiceTest(message =>
+        AddCommand("css_play", "Play a YouTube or Twitch video on the screen: !play <url>", OnPlay);
+        AddCommand("css_screenmute", "Toggle screen audio for yourself", (player, info) =>
         {
-            Logger.LogInformation("Voice test: {message}", message);
-            Server.PrintToChatAll($" [Screen] Voice test {message.Split('\n')[0]}");
+            if (player is not { IsValid: true, IsBot: false } || player.Slot is < 0 or >= 64) return;
+            _muted ^= 1UL << player.Slot;
+            info.ReplyToCommand((_muted & (1UL << player.Slot)) != 0
+                ? " [Screen] Screen audio muted." : " [Screen] Screen audio unmuted.");
         });
-        RegisterListener<Listeners.OnTick>(_voiceTest.Tick);
-        AddCommand("css_screenvoicetest", "Experiment: send a 2 s Opus tone as voice data: [speaker slot] [packets per message] [entity index] [sequenced 1/0]", OnVoiceTest);
-        HookUserMessage(VoiceData.MessageId, LogVoiceMessage);
-        AddCommand("css_screenvoicelog", "Print the fields of the next N voice messages the server sends (default 6)", (_, info) =>
+        RegisterListener<Listeners.OnClientDisconnect>(slot =>
         {
-            _voiceLogRemaining = info.ArgCount > 1 && int.TryParse(info.GetArg(1), out var count) ? count : 6;
-            info.ReplyToCommand($" [Screen] Logging the next {_voiceLogRemaining} voice messages.");
+            if (slot is >= 0 and < 64) _muted &= ~(1UL << slot);
         });
-        Logger.LogInformation("TheatreScreen {version} loaded; starting black, use !play <YouTube URL>. Feeder: {feeder}",
+        Logger.LogInformation("TheatreScreen {version} loaded; starting black, use !play <YouTube/Twitch URL>. Feeder: {feeder}",
             ModuleVersion, Config.FeederUrl);
-        Server.PrintToConsole($"[TheatreScreen] v{ModuleVersion} loaded. Use !play <YouTube URL>; feeder {Config.FeederUrl}");
+        Server.PrintToConsole($"[TheatreScreen] v{ModuleVersion} loaded. Use !play <YouTube/Twitch URL>; feeder {Config.FeederUrl}");
         QueueScreen(); // Also spawn when loaded mid-round, without waiting for round_start.
     }
 
@@ -71,10 +73,9 @@ public sealed class TheatreScreenPlugin : BasePlugin, IPluginConfig<TheatreScree
     public override void Unload(bool hotReload)
     {
         _loaded = false;
-        _voiceTest?.Stop();
+        StopPlayback();
         _theatreVoice?.Dispose();
         _theatreVoice = null;
-        StopPlayback();
         ClearScreen();
     }
 
@@ -84,7 +85,7 @@ public sealed class TheatreScreenPlugin : BasePlugin, IPluginConfig<TheatreScree
         // ArgString retains the original text after the command, including its query.
         if (!PlaybackRequest.TryReadArgument(info.ArgString, out var sourceUrl))
         {
-            info.ReplyToCommand(" [Screen] Usage: !play <YouTube URL>. For long links, use console: css_play \"URL\"");
+            info.ReplyToCommand(" [Screen] Usage: !play <YouTube/Twitch URL>. For long links, use console: css_play \"URL\"");
             return;
         }
         if (!PlaybackRequest.TryCreate(Config.FeederUrl, sourceUrl, Config.Columns, Config.Rows,
@@ -98,38 +99,12 @@ public sealed class TheatreScreenPlugin : BasePlugin, IPluginConfig<TheatreScree
             info.ReplyToCommand(" [Screen] Could not create the screen. Check the TheatreScreen server log.");
             return;
         }
-        StopPlayback();
-        ShowBlack();
-        Logger.LogInformation("Playback requested by {player}: {url}", player?.PlayerName ?? "server console", sourceUrl);
-        _stream = new VideoStream(endpoint!, message => Logger.LogInformation("Theatre feeder: {message}", message));
-        info.ReplyToCommand(" [Screen] Loading video...");
-    }
-
-    private void OnVoiceTest(CCSPlayerController? player, CommandInfo info)
-    {
-        var humans = Utilities.GetPlayers().Where(p => p is { IsValid: true, IsBot: false }).ToList();
-        int speaker;
-        if (info.ArgCount > 1)
+        var bot = Utilities.GetPlayers().FirstOrDefault(p => p is { IsValid: true, IsBot: true } && p.Slot is >= 0 and < 64);
+        if (bot == null)
         {
-            if (!int.TryParse(info.GetArg(1), out speaker))
-            {
-                info.ReplyToCommand(" [Screen] Usage: css_screenvoicetest [speaker slot] [packets per message] [entity index, -1 for none] [0 for Audio-style zero offsets]");
-                return;
-            }
-        }
-        else if (Utilities.GetPlayers().FirstOrDefault(p => p is { IsValid: true, IsBot: true }) is { } bot)
-            speaker = bot.Slot;
-        else if (player is { IsValid: true })
-            speaker = player.Slot;
-        else
-        {
-            info.ReplyToCommand(" [Screen] No speaker: add a bot or pass a slot.");
+            info.ReplyToCommand(" [Screen] Audio needs a bot as its voice speaker. Add a bot, then try !play again.");
             return;
         }
-        var batch = info.ArgCount > 2 && int.TryParse(info.GetArg(2), out var n) ? n : 3;
-        // Defaults to the speaker's controller index (slot + 1); -1 leaves the field unset.
-        var entity = info.ArgCount > 3 && int.TryParse(info.GetArg(3), out var e) ? e : speaker + 1;
-        var sequenced = info.ArgCount <= 4 || info.GetArg(4) != "0";
         if (_theatreVoice == null)
         {
             var path = Path.Combine(ModuleDirectory, "..", "..", "..", "theatrevoice", "bin", "theatrevoice.so");
@@ -139,58 +114,87 @@ public sealed class TheatreScreenPlugin : BasePlugin, IPluginConfig<TheatreScree
                 return;
             }
         }
-        var recipients = humans.Aggregate(0UL, (mask, human) => mask | 1UL << human.Slot);
-        var summary = _voiceTest!.Start(_theatreVoice!, speaker, entity, recipients, batch, sequenced);
-        Logger.LogInformation("Voice test started by {player}: {summary}", player?.PlayerName ?? "server console", summary);
-        info.ReplyToCommand($" [Screen] Voice test: {summary}");
-    }
-
-    /// <summary>Prints voice messages as the game parsed them, minus the audio bytes, to compare ours with real clients'.</summary>
-    private HookResult LogVoiceMessage(UserMessage message)
-    {
-        if (_voiceLogRemaining <= 0) return HookResult.Continue;
-        _voiceLogRemaining--;
-        var fields = message.DebugString.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-            .Where(line => !line.StartsWith("voice_data:"));
-        var summary = string.Join(' ', fields);
-        Logger.LogInformation("Voice message: {fields}", summary);
-        Server.PrintToChatAll($" [Screen] VoiceData: {summary}");
-        return HookResult.Continue;
+        StopPlayback();
+        ShowBlack();
+        _speaker = bot.Slot;
+        _voiceSection++;
+        _lastTick = _lastAudioProgress = Stopwatch.GetTimestamp();
+        _playback = new AvPlayback();
+        Logger.LogInformation("Playback requested by {player}: {url}; voice speaker {speaker}", player?.PlayerName ?? "server console", sourceUrl, _speaker);
+        _stream = new AvStream(endpoint!, message => Logger.LogInformation("Theatre feeder: {message}", message));
+        info.ReplyToCommand(" [Screen] Loading video...");
     }
 
     private void DrawVideoFrame()
     {
-        if (_stream is not { } stream)
-            return;
-        if (stream.Finished)
+        if (_stream is not { } stream || _playback is not { } playback) return;
+        if (stream.Error != null || stream.Finished)
         {
-            var error = stream.Error;
-            StopPlayback();
-            ShowBlack();
-            var summary = error is { Length: > 180 } ? error[..180] + "... (see server log)" : error;
-            Server.PrintToChatAll(error == null ? " [Screen] Video finished." : $" [Screen] Playback failed: {summary}");
+            FinishPlayback(stream.Error);
             return;
         }
-        if (_screen is not { } screen)
-            return;
-        if (stream.Latest is { IsFresh: true } received)
+        var players = Utilities.GetPlayers();
+        if (!players.Any(p => p is { IsValid: true, IsBot: true } && p.Slot == _speaker))
         {
-            if (!ReferenceEquals(received, _shownStreamFrame))
+            FinishPlayback("The voice speaker bot disconnected; add a bot and play again.");
+            return;
+        }
+        var now = Stopwatch.GetTimestamp();
+        var elapsed = Stopwatch.GetElapsedTime(_lastTick, now).TotalSeconds;
+        _lastTick = now;
+        var recipients = players.Where(p => p is { IsValid: true, IsBot: false } && p.Slot is >= 0 and < 64)
+            .Aggregate(0UL, (mask, human) => mask | (1UL << human.Slot)) & ~_muted;
+        try
+        {
+            var before = playback.SentPackets;
+            playback.Tick(elapsed, stream.Ready, stream.InputEnded, () => stream.BufferedAudio, stream.TakeAudio,
+                (packets, sequenceBytes, samples) =>
+                {
+                    // Even when everyone is muted, consume on schedule and retain the stream clock.
+                    if (recipients == 0) return;
+                    var data = VoiceData.Build(_speaker, _speaker + 1, _voiceSection, sequenceBytes, samples, packets);
+                    _theatreVoice!.Post(VoiceData.MessageId, data, recipients);
+                });
+            if (playback.SentPackets != before) _lastAudioProgress = now;
+            else if (Stopwatch.GetElapsedTime(_lastAudioProgress, now).TotalSeconds > (before == 0 ? 75 : 10))
             {
-                screen.Draw((col, row) => received.Pixel(col, row, screen.Columns, screen.Rows));
-                _shownStreamFrame = received;
+                FinishPlayback("Feeder audio stalled.");
+                return;
             }
         }
-        else if (_shownStreamFrame != null)
-            ShowBlack();
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Screen voice playback failed");
+            FinishPlayback(ex.Message);
+            return;
+        }
+        if (stream.VideoAt(playback.Seconds) is { } received && _screen is { } screen)
+        {
+            screen.Draw((col, row) => received.Pixel(col, row, screen.Columns, screen.Rows));
+            _shownStreamFrame = received;
+        }
+    }
+
+    private void FinishPlayback(string? error)
+    {
+        StopPlayback();
+        ShowBlack();
+        var summary = error is { Length: > 180 } ? error[..180] + "... (see server log)" : error;
+        Server.PrintToChatAll(error == null ? " [Screen] Video finished." : $" [Screen] Playback failed: {summary}");
     }
 
     private bool SpawnScreen()
     {
+        var previous = _shownStreamFrame;
         ClearScreen();
         try
         {
             _screen = new Screen(Config, (_, _) => Color.Black);
+            if (previous != null)
+            {
+                _screen.Draw((col, row) => previous.Pixel(col, row, _screen.Columns, _screen.Rows));
+                _shownStreamFrame = previous;
+            }
             Logger.LogInformation("Spawned black {cols}x{rows} screen; backdrop blocks: {blocks}",
                 _screen.Columns, _screen.Rows, _screen.Backdrop?.BlockCount ?? 0);
             return true;
@@ -213,6 +217,7 @@ public sealed class TheatreScreenPlugin : BasePlugin, IPluginConfig<TheatreScree
     {
         _stream?.Dispose();
         _stream = null;
+        _playback = null;
         _shownStreamFrame = null;
     }
 

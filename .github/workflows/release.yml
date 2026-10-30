@@ -4,6 +4,7 @@ name: release
 # other branches overwrite a prerelease tagged with the branch name.
 on:
   push:
+    branches: ["**"] # Tags label the same build; do not start a second release.
   workflow_dispatch:
 
 permissions:
@@ -23,6 +24,7 @@ jobs:
         run: |
           dotnet run --project tests/VideoStreamChecks -c Release
           dotnet run --project tests/VoiceDataChecks -c Release
+          dotnet run --project tests/AvStreamChecks -c Release
 
       # Pinned to the commits TheatreVoice was built and checked against;
       # Metamod 2.0.0-dev+1483 is the build installed on the servers.

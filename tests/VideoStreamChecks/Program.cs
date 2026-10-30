@@ -110,8 +110,8 @@ listener.Stop();
 Check(reports.Any(s => s.StartsWith("Playback failed")), "Missing failure report");
 await Until(() => !pixel.IsFresh, 4000, "Stale frame did not expire");
 
-// The command accepts only YouTube URLs and escapes playlist query parameters.
-foreach (var url in new[] { "https://www.youtube.com/watch?v=aRiVUVNUhls", "https://youtu.be/aRiVUVNUhls?si=wuUOB65R6J6Viwl", "https://www.youtube.com/watch?v=abc&list=xyz" })
+// The command accepts YouTube/Twitch URLs and escapes playlist query parameters.
+foreach (var url in new[] { "https://www.youtube.com/watch?v=aRiVUVNUhls", "https://youtu.be/aRiVUVNUhls?si=wuUOB65R6J6Viwl", "https://www.youtube.com/watch?v=abc&list=xyz", "https://www.twitch.tv/example" })
 {
     foreach (var arguments in new[] { url, $"  {url}  ", $"\"{url}\"", $"“{url}”" })
     {
@@ -126,7 +126,8 @@ foreach (var arguments in new[] { "", "   ", "\"\"", "https://youtu.be/abc extra
     Check(!PlaybackRequest.TryReadArgument(arguments, out _), "Missing or extra command arguments accepted");
 Check(PlaybackRequest.TryCreate("http://172.30.0.1:8787", "https://www.youtube.com/watch?v=abc&list=xyz", 64, 36, 15,
     out var play, out _), "Valid YouTube URL rejected");
-Check(play!.Query.Contains("%26list%3Dxyz") && play.Query.EndsWith("&w=64&h=36&fps=15"), "Video URL or screen dimensions encoded incorrectly");
+Check(play!.AbsolutePath == "/av", "Command did not use combined AV endpoint");
+Check(play.Query.Contains("%26list%3Dxyz") && play.Query.EndsWith("&w=64&h=36&fps=15"), "Video URL or screen dimensions encoded incorrectly");
 foreach (var source in new[] { "file:///tmp/video", "https://youtube.com.attacker.test/watch", "https://youtube.com@attacker.test/", "hello" })
     Check(!PlaybackRequest.TryCreate("http://localhost:8787", source, 64, 36, 15, out _, out _), "Invalid source accepted");
 Check(!PlaybackRequest.TryCreate("invalid", "https://youtu.be/abc", 64, 36, 15, out _, out _), "Invalid feeder accepted");
