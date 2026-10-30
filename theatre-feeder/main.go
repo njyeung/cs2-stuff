@@ -318,6 +318,9 @@ func startPipelineOutputs(src, format string, audio *os.File, outputArgs ...stri
 		// cuts a stream off after a few seconds.
 		ytdlp: exec.Command(*ytdlpPath,
 			"--quiet", "--no-progress", "--no-playlist",
+			// yt-dlp quiet also silences its ffmpeg downloader. Override that
+			// child only: otherwise failures become an unexplained exit code.
+			"--downloader-args", "ffmpeg:-loglevel warning -nostats",
 			"-f", format, "-o", "-", "--", src),
 		ffmpeg: exec.Command(*ffmpegPath,
 			append([]string{"-hide_banner", "-loglevel", "error", "-i", "pipe:0"},
@@ -361,7 +364,13 @@ func (p *pipeline) finish() error {
 	p.once.Do(func() {
 		for _, cmd := range []*exec.Cmd{p.ytdlp, p.ffmpeg} {
 			if cmd.Process != nil {
-				p.waitErr = errors.Join(p.waitErr, cmd.Wait())
+				if err := cmd.Wait(); err != nil {
+					name := "yt-dlp downloader"
+					if cmd == p.ffmpeg {
+						name = "ffmpeg decoder"
+					}
+					p.waitErr = errors.Join(p.waitErr, fmt.Errorf("%s: %w", name, err))
+				}
 			}
 		}
 	})
@@ -386,7 +395,14 @@ func (p *pipeline) stop() {
 }
 
 func (p *pipeline) stderr() string {
-	return strings.TrimSpace(p.ytdlpErr.String() + "\n" + p.ffmpegErr.String())
+	var messages []string
+	if msg := p.ytdlpErr.String(); msg != "" {
+		messages = append(messages, "yt-dlp downloader: "+msg)
+	}
+	if msg := p.ffmpegErr.String(); msg != "" {
+		messages = append(messages, "ffmpeg decoder: "+msg)
+	}
+	return strings.Join(messages, "\n")
 }
 
 // tail keeps the last few KB written to it — enough of a child's stderr to say why

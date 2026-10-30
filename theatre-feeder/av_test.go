@@ -4,11 +4,14 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"encoding/json"
 	"io"
+	"net/http"
 	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -128,5 +131,54 @@ func TestAVCancellationBeforeOutput(t *testing.T) {
 	case <-done:
 	case <-time.After(3 * time.Second):
 		t.Fatal("cancellation did not stop pipeline")
+	}
+}
+
+// Exercise the real yt-dlp -> internal ffmpeg failure path: quiet mode must not
+// turn an invalid HTTP media response into only "ffmpeg exited with code 183".
+func TestDownloaderFailureIncludesFFmpegDiagnostic(t *testing.T) {
+	realYTDLP, err := exec.LookPath("yt-dlp")
+	if err != nil {
+		t.Skip("yt-dlp unavailable")
+	}
+	if _, err := exec.LookPath("ffmpeg"); err != nil {
+		t.Skip("ffmpeg unavailable")
+	}
+	badMedia := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		io.WriteString(w, "<html>This upstream response is not a media stream.</html>")
+	}))
+	defer badMedia.Close()
+	dir := t.TempDir()
+	info, err := json.Marshal(map[string]any{
+		"id": "broken", "title": "broken media", "extractor": "generic", "webpage_url": badMedia.URL,
+		"formats": []map[string]any{
+			{"format_id": "v", "url": badMedia.URL + "/v.mp4", "ext": "mp4", "height": 360, "vcodec": "h264", "acodec": "none", "protocol": "http"},
+			{"format_id": "a", "url": badMedia.URL + "/a.m4a", "ext": "m4a", "vcodec": "none", "acodec": "aac", "protocol": "http"},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	infoPath := filepath.Join(dir, "input.json")
+	if err := os.WriteFile(infoPath, info, 0600); err != nil {
+		t.Fatal(err)
+	}
+	wrapper := filepath.Join(dir, "yt-dlp")
+	quote := func(s string) string { return "'" + strings.ReplaceAll(s, "'", "'\"'\"'") + "'" }
+	script := "#!/bin/sh\nexec " + quote(realYTDLP) + " --ignore-config --load-info-json " + quote(infoPath) + " \"$@\"\n"
+	if err := os.WriteFile(wrapper, []byte(script), 0700); err != nil {
+		t.Fatal(err)
+	}
+	old := *ytdlpPath
+	*ytdlpPath = wrapper
+	defer func() { *ytdlpPath = old }()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	response := httptest.NewRecorder()
+	serveAV(response, httptest.NewRequest("GET", "/av?url=https://youtu.be/test&w=16&h=12&fps=10", nil).WithContext(ctx))
+	body := response.Body.String()
+	if response.Code != 502 || !strings.Contains(body, "yt-dlp downloader:") || !strings.Contains(body, "ffmpeg decoder:") || !strings.Contains(body, "Error opening input") {
+		t.Fatalf("Missing underlying ffmpeg diagnostic: status=%d body=%s", response.Code, body)
 	}
 }

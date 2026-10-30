@@ -36,3 +36,11 @@ network playback has not been validated by the local checks.
 Run `go test -race ./...` here. Tests exercise cross-page Ogg packets, malformed
 input, cancellation, and an actual ffmpeg audio/video fixture (when installed).
 Build with `go build .`; the service uses the existing deployment path.
+
+If playback stalls, inspect `journalctl -u theatre-feeder`: AV requests log their
+URL and dimensions, and termination logs include video/audio counts, media times
+and elapsed wall time. Errors are labeled `yt-dlp downloader` or `ffmpeg decoder`.
+The downloader's ffmpeg warnings/errors remain visible even with yt-dlp quiet,
+so a download failure includes its underlying message rather than only an exit
+code. An Opus parser message at EOF alone does not establish why downloading
+stopped. Increasing the plugin's stall timeout cannot repair a failed download.

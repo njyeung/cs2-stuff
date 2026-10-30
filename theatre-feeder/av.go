@@ -10,6 +10,7 @@ import (
 	"os"
 	"strconv"
 	"sync"
+	"time"
 )
 
 // TSM1: magic, uint32 LE width, height, fps. Records use a one-byte tag
@@ -35,6 +36,8 @@ func serveAV(w http.ResponseWriter, r *http.Request) {
 		dims[i] = n
 	}
 	width, height, fps := dims[0], dims[1], dims[2]
+	startedAt := time.Now()
+	log.Printf("%s: AV %s at %dx%d@%d", r.RemoteAddr, src, width, height, fps)
 	ar, aw, err := os.Pipe()
 	if err != nil {
 		http.Error(w, err.Error(), 500)
@@ -105,18 +108,22 @@ func serveAV(w http.ResponseWriter, r *http.Request) {
 	}()
 	go func() { readers.Wait(); close(records) }()
 	started := false
+	var sentVideo, sentAudio uint64
+	progress := func() string {
+		return fmt.Sprintf("video=%d frames (%.2fs), audio=%d packets (%.2fs), elapsed=%s", sentVideo, float64(sentVideo)/float64(fps), sentAudio, float64(sentAudio)*0.01, time.Since(startedAt).Round(time.Millisecond))
+	}
 	rc := http.NewResponseController(w)
 	for {
 		select {
 		case <-ctx.Done():
+			log.Printf("%s: AV client canceled: %s", r.RemoteAddr, progress())
 			return
 		case e := <-failures:
 			cancel()
 			p.stop()
+			log.Printf("%s: AV decode failed: %v; %s\n%s", r.RemoteAddr, e, progress(), p.stderr())
 			if !started {
 				http.Error(w, fmt.Sprintf("decode: %v\n%s", e, p.stderr()), 502)
-			} else {
-				log.Printf("AV decode: %v", e)
 			}
 			return
 		case record, ok := <-records:
@@ -127,10 +134,13 @@ func serveAV(w http.ResponseWriter, r *http.Request) {
 					e = failure
 				default:
 				}
+				if !started || e != nil {
+					log.Printf("%s: AV pipeline failed: %v; %s\n%s", r.RemoteAddr, e, progress(), p.stderr())
+				} else {
+					log.Printf("%s: AV complete: %s", r.RemoteAddr, progress())
+				}
 				if !started {
 					http.Error(w, fmt.Sprintf("no AV records: %v\n%s", e, p.stderr()), 502)
-				} else if e != nil {
-					log.Printf("AV pipeline: %v: %s", e, p.stderr())
 				}
 				return
 			}
@@ -142,10 +152,17 @@ func serveAV(w http.ResponseWriter, r *http.Request) {
 				started = true
 			}
 			if _, e := w.Write(record); e != nil {
+				log.Printf("%s: AV client write failed: %v; %s", r.RemoteAddr, e, progress())
 				return
 			}
 			if e := rc.Flush(); e != nil {
+				log.Printf("%s: AV client write failed: %v; %s", r.RemoteAddr, e, progress())
 				return
+			}
+			if record[0] == 'V' {
+				sentVideo++
+			} else {
+				sentAudio++
 			}
 		}
 	}
