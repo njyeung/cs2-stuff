@@ -11,7 +11,7 @@ namespace TheatreScreen;
 public sealed class TheatreScreenPlugin : BasePlugin, IPluginConfig<TheatreScreenConfig>
 {
     public override string ModuleName => "TheatreScreen";
-    public override string ModuleVersion => "0.7.0";
+    public override string ModuleVersion => "0.7.1";
     public override string ModuleAuthor => "cs2-server";
     public override string ModuleDescription => "Entity-pixel video screen rendered entirely server-side.";
 
@@ -24,6 +24,10 @@ public sealed class TheatreScreenPlugin : BasePlugin, IPluginConfig<TheatreScree
     private int _speaker;
     private uint _voiceSection;
     private ulong _muted;
+    private ulong _recipients;
+    private long _voiceMessages;
+    private long _lastVoicePost;
+    private long _lastStatusReport;
     private VideoFrame? _shownStreamFrame;
     private TheatreVoice? _theatreVoice;
     private bool _loaded;
@@ -53,6 +57,12 @@ public sealed class TheatreScreenPlugin : BasePlugin, IPluginConfig<TheatreScree
             _muted ^= 1UL << player.Slot;
             info.ReplyToCommand((_muted & (1UL << player.Slot)) != 0
                 ? " [Screen] Screen audio muted." : " [Screen] Screen audio unmuted.");
+        });
+        AddCommand("css_screenstatus", "Show screen playback, voice submission and buffer state", (_, info) =>
+        {
+            var status = PlaybackStatus();
+            info.ReplyToCommand($" [Screen] {status}");
+            Logger.LogInformation("Screen status: {status}", status);
         });
         RegisterListener<Listeners.OnClientDisconnect>(slot =>
         {
@@ -118,7 +128,9 @@ public sealed class TheatreScreenPlugin : BasePlugin, IPluginConfig<TheatreScree
         ShowBlack();
         _speaker = bot.Slot;
         _voiceSection++;
-        _lastTick = _lastAudioProgress = Stopwatch.GetTimestamp();
+        _lastTick = _lastAudioProgress = _lastStatusReport = Stopwatch.GetTimestamp();
+        _voiceMessages = _lastVoicePost = 0;
+        _recipients = 0;
         _playback = new AvPlayback();
         Logger.LogInformation("Playback requested by {player}: {url}; voice speaker {speaker}", player?.PlayerName ?? "server console", sourceUrl, _speaker);
         _stream = new AvStream(endpoint!, message => Logger.LogInformation("Theatre feeder: {message}", message));
@@ -144,6 +156,7 @@ public sealed class TheatreScreenPlugin : BasePlugin, IPluginConfig<TheatreScree
         _lastTick = now;
         var recipients = players.Where(p => p is { IsValid: true, IsBot: false } && p.Slot is >= 0 and < 64)
             .Aggregate(0UL, (mask, human) => mask | (1UL << human.Slot)) & ~_muted;
+        _recipients = recipients;
         try
         {
             var before = playback.SentPackets;
@@ -154,11 +167,15 @@ public sealed class TheatreScreenPlugin : BasePlugin, IPluginConfig<TheatreScree
                     if (recipients == 0) return;
                     var data = VoiceData.Build(_speaker, _speaker + 1, _voiceSection, sequenceBytes, samples, packets);
                     _theatreVoice!.Post(VoiceData.MessageId, data, recipients);
+                    _lastVoicePost = now;
+                    if (++_voiceMessages == 1)
+                        Logger.LogInformation("First screen voice message submitted: speaker={speaker}, entity={entity}, section={section}, recipients=0x{recipients:X}, packets={packets}, bytes={bytes}",
+                            _speaker, _speaker + 1, _voiceSection, recipients, packets.Length, data.Length);
                 });
             if (playback.SentPackets != before) _lastAudioProgress = now;
             else if (Stopwatch.GetElapsedTime(_lastAudioProgress, now).TotalSeconds > (before == 0 ? 75 : 10))
             {
-                FinishPlayback("Feeder audio stalled.");
+                FinishPlayback($"Feeder audio stalled. {PlaybackStatus()}");
                 return;
             }
         }
@@ -168,6 +185,11 @@ public sealed class TheatreScreenPlugin : BasePlugin, IPluginConfig<TheatreScree
             FinishPlayback(ex.Message);
             return;
         }
+        if (Stopwatch.GetElapsedTime(_lastStatusReport, now).TotalSeconds >= 10)
+        {
+            _lastStatusReport = now;
+            Logger.LogInformation("Screen playback: {status}", PlaybackStatus());
+        }
         if (stream.VideoAt(playback.Seconds) is { } received && _screen is { } screen)
         {
             screen.Draw((col, row) => received.Pixel(col, row, screen.Columns, screen.Rows));
@@ -175,8 +197,20 @@ public sealed class TheatreScreenPlugin : BasePlugin, IPluginConfig<TheatreScree
         }
     }
 
+    private string PlaybackStatus()
+    {
+        if (_stream is not { } stream || _playback is not { } playback) return "No active playback.";
+        var voiceAge = _lastVoicePost == 0 ? "never" : $"{Stopwatch.GetElapsedTime(_lastVoicePost).TotalSeconds:F2}s ago";
+        return $"clock={playback.Seconds:F2}s, consumed_audio={playback.SentPackets}, voice_messages_submitted={_voiceMessages}, last_voice={voiceAge}, " +
+               $"speaker={_speaker}, section={_voiceSection}, recipients=0x{_recipients:X}, muted=0x{_muted:X}, " +
+               $"audio_buffer={stream.BufferedAudio}, video_buffer={stream.BufferedVideo}, dropped_future_video={stream.DroppedVideoFrames}, " +
+               $"input_ended={stream.InputEnded}, error={stream.Error ?? "none"}";
+    }
+
     private void FinishPlayback(string? error)
     {
+        if (error != null) Logger.LogWarning("Screen playback failed: {error}; {status}", error, PlaybackStatus());
+        else Logger.LogInformation("Screen playback finished: {status}", PlaybackStatus());
         StopPlayback();
         ShowBlack();
         var summary = error is { Length: > 180 } ? error[..180] + "... (see server log)" : error;

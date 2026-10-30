@@ -12,6 +12,8 @@ public sealed class AvStream : IDisposable
     private readonly Channel<byte[]> _audio = Channel.CreateBounded<byte[]>(new BoundedChannelOptions(500)
         { SingleReader = true, SingleWriter = true });
     private Channel<TimedVideoFrame>? _video;
+    private readonly SemaphoreSlim _bufferChanged = new(0, 1);
+    private int _droppedVideo;
     private readonly Task _receiver;
     private string? _error;
     private int _disposed;
@@ -24,6 +26,7 @@ public sealed class AvStream : IDisposable
     public bool Finished => InputEnded && BufferedAudio == 0;
     public bool Ready => BufferedVideo > 0 && (BufferedAudio >= 30 || InputEnded && BufferedAudio > 0);
     public int Fps => Volatile.Read(ref _fps);
+    public int DroppedVideoFrames => Volatile.Read(ref _droppedVideo);
 
     public AvStream(Uri endpoint, Action<string> report) =>
         _receiver = Task.Run(() => Receive(endpoint, report, _stop.Token));
@@ -32,6 +35,7 @@ public sealed class AvStream : IDisposable
     {
         var packets = new List<byte[]>(count);
         while (packets.Count < count && _audio.Reader.TryRead(out var packet)) packets.Add(packet);
+        if (packets.Count > 0) NotifyBufferChanged();
         return [.. packets];
     }
 
@@ -44,7 +48,33 @@ public sealed class AvStream : IDisposable
         {
             if (video.Reader.TryRead(out next)) latest = next.Frame;
         }
+        if (latest != null) NotifyBufferChanged();
         return latest;
+    }
+
+    // The game thread is the sole consumer; coalesce its audio/video capacity
+    // notifications so the network reader can reconsider either track's state.
+    private void NotifyBufferChanged()
+    {
+        if (_bufferChanged.CurrentCount == 0) _bufferChanged.Release();
+    }
+
+    private async ValueTask WriteVideo(uint index, VideoFrame frame, CancellationToken stop)
+    {
+        while (!_video!.Writer.TryWrite(new(index, frame)))
+        {
+            stop.ThrowIfCancellationRequested();
+            if (BufferedAudio < 3)
+            {
+                // A full queue already holds the nearest five seconds of video.
+                // Waiting here would prevent reading the audio (or EOF) needed to
+                // advance that queue. Discard this excess future frame instead;
+                // keep the queued frames and the audio clock unchanged.
+                Interlocked.Increment(ref _droppedVideo);
+                return;
+            }
+            await _bufferChanged.WaitAsync(stop);
+        }
     }
 
     private async Task Receive(Uri endpoint, Action<string> report, CancellationToken stop)
@@ -70,7 +100,7 @@ public sealed class AvStream : IDisposable
                 { SingleReader = true, SingleWriter = true }));
             report($"Connected AV: {header.Width}x{header.Height} at {header.Fps} FPS, 48 kHz mono Opus");
             await AvRecords.ReadAsync(body, header,
-                (index, rgb) => _video.Writer.WriteAsync(new(index, new(header.Width, header.Height, rgb)), stop),
+                (index, rgb) => WriteVideo(index, new(header.Width, header.Height, rgb), stop),
                 (_, packet) => _audio.Writer.WriteAsync(packet, stop), stop);
         }
         catch (OperationCanceledException) when (stop.IsCancellationRequested) { }
@@ -81,6 +111,7 @@ public sealed class AvStream : IDisposable
         }
         finally
         {
+            if (DroppedVideoFrames > 0) report($"Discarded {DroppedVideoFrames} excess future video frames to keep audio/EOF readable.");
             _audio.Writer.TryComplete();
             Volatile.Read(ref _video)?.Writer.TryComplete();
         }
@@ -90,7 +121,7 @@ public sealed class AvStream : IDisposable
     {
         if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
         _stop.Cancel();
-        _ = _receiver.ContinueWith(_ => { _http.Dispose(); _stop.Dispose(); }, TaskScheduler.Default);
+        _ = _receiver.ContinueWith(_ => { _http.Dispose(); _stop.Dispose(); _bufferChanged.Dispose(); }, TaskScheduler.Default);
     }
 
     private sealed record TimedVideoFrame(uint Index, VideoFrame Frame);

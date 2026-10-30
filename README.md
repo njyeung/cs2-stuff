@@ -49,6 +49,15 @@ A separate audio-stall timeout prevents a blocked track from waiting forever.
 Feeder errors are logged and summarized in chat. Map changes cancel playback;
 round starts rebuild the screen and retain the currently shown frame.
 If the speaker bot disconnects, playback stops with a message.
+When a full video buffer blocks reading needed audio or EOF, the reader retains
+its nearest queued frames and discards excess future frames so the audio clock
+can resume or finish. Buffer sizes stay bounded.
+
+Run `css_screenstatus` in the game console if audio disappears. It reports the
+audio clock, submitted voice messages, speaker, recipient/mute masks, queue sizes
+and whether the HTTP input ended. The plugin logs this state every 10 seconds
+while playing, plus the first successful TheatreVoice submission and the final
+state. A successful submission does not confirm that a game client played it.
 
 Install the release's `theatrevoice` and `metamod` directories into the server's
 `addons` directory and restart so Metamod loads TheatreVoice. No ffmpeg or Opus
@@ -60,7 +69,7 @@ The plugin queues a black screen on load and map start and rebuilds after round
 cleanup. Keep `Backdrop` enabled because black beam pixels alone are transparent.
 The cube model is precached during map loading: after installing a new plugin,
 restart the server or change the map to ensure the black backdrop is available.
-Look for `[TheatreScreen] v0.7.0 loaded` in the server console and `Spawned black`
+Look for `[TheatreScreen] v0.7.1 loaded` in the server console and `Spawned black`
 in the plugin log. Invalid JSON (including an extra quote on a key) prevents the
 plugin from loading at all; validate the JSON inside the TOML template too.
 

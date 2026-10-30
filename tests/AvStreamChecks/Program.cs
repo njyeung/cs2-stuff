@@ -89,7 +89,15 @@ Check(messages[^1].Count == 2 && clock.SentPackets == 41, "Lost EOF partial batc
 // queues stop reading even if the producer sent a whole VOD immediately.
 var listener = new TcpListener(IPAddress.Loopback, 0); listener.Start();
 var endpoint = new Uri($"http://127.0.0.1:{((IPEndPoint)listener.LocalEndpoint).Port}/av");
-var responses = new[] { Body(6), Body(100), Encoding.UTF8.GetBytes("unavailable fixture"), Body(1)[..^1] };
+// Match the reported >5 s video-only tail. The last one/two audio packets
+// cannot be consumed as a full batch until the reader reaches EOF.
+using var videoTail = new MemoryStream();
+videoTail.Write(Body(4));
+for (uint i = 4; i < 110; i++) videoTail.Write(Record('V', i, [(byte)i, 0, 0]));
+using var videoBurst = new MemoryStream();
+videoBurst.Write(videoTail.ToArray());
+for (uint i = 40; i < 100; i++) videoBurst.Write(Record('A', i, [0xF0, (byte)i]));
+var responses = new[] { Body(6), Body(100), Encoding.UTF8.GetBytes("unavailable fixture"), Body(1)[..^1], videoTail.ToArray(), videoBurst.ToArray() };
 var server = Task.Run(async () =>
 {
     for (var i = 0; i < responses.Length; i++)
@@ -138,6 +146,38 @@ using (var stream = new AvStream(endpoint, Console.WriteLine))
     await Until(() => stream.InputEnded, "Truncated AV did not end");
     Check(stream.Error != null, "Truncated AV silently accepted");
 }
+using (var stream = new AvStream(endpoint, Console.WriteLine))
+{
+    await Until(() => stream.Ready, "Tail fixture never buffered");
+    var playback = new AvPlayback();
+    for (var i = 0; i < 400 && !stream.Finished; i++)
+    {
+        playback.Tick(0.03, stream.Ready, stream.InputEnded, () => stream.BufferedAudio, stream.TakeAudio, (_, _, _) => { });
+        stream.VideoAt(playback.Seconds);
+        Check(stream.BufferedVideo <= 50 && stream.BufferedAudio <= 500, "Tail recovery exceeded buffer limits");
+        await Task.Delay(5);
+    }
+    Check(stream.Error == null && stream.Finished && playback.SentPackets == 40,
+        $"Video-only tail blocked EOF: packets={playback.SentPackets}, audio={stream.BufferedAudio}, video={stream.BufferedVideo}, inputEnded={stream.InputEnded}, error={stream.Error}");
+    Check(stream.DroppedVideoFrames > 0, "Tail fixture did not exercise overflow recovery");
+}
+// Overflow can also hide later audio records, not just EOF. Keep the clock
+// synchronized and deliver every audio packet despite an oversized video burst.
+using (var stream = new AvStream(endpoint, Console.WriteLine))
+{
+    await Until(() => stream.Ready, "Burst fixture never buffered");
+    var playback = new AvPlayback();
+    for (var i = 0; i < 500 && !stream.Finished; i++)
+    {
+        playback.Tick(0.03, stream.Ready, stream.InputEnded, () => stream.BufferedAudio, stream.TakeAudio, (_, _, _) => { });
+        var frame = stream.VideoAt(playback.Seconds);
+        if (frame != null) Check(frame.Pixel(0, 0, 1, 1).R / 10d <= playback.Seconds, "Overflow recovery advanced video beyond audio");
+        Check(stream.BufferedVideo <= 50 && stream.BufferedAudio <= 500, "Burst recovery exceeded buffer limits");
+        await Task.Delay(5);
+    }
+    Check(stream.Finished && stream.Error == null && playback.SentPackets == 100,
+        $"Video burst hid subsequent audio: consumed={playback.SentPackets}, ended={stream.InputEnded}, error={stream.Error}");
+}
 await server.WaitAsync(TimeSpan.FromSeconds(3)); listener.Stop();
 
 var stalled = new TcpListener(IPAddress.Loopback, 0); stalled.Start();
@@ -176,7 +216,7 @@ if (args.Length == 1)
         $"End-to-end feeder playback failed: {live.Error}");
     Console.WriteLine($"PASS: real feeder to voice serialization: {playback.SentPackets} packets, {seenMessages} messages, {seenFrames} displayed frames.");
 }
-Console.WriteLine("PASS: TSM1 parsing, bounds, HTTP lifecycle, EOF drain, cancellation, packet clock, underrun recovery, sequence offsets and video sync.");
+Console.WriteLine("PASS: TSM1 parsing, bounds, HTTP lifecycle, EOF drain, cancellation, packet clock, underrun recovery, video overflow/EOF recovery, sequence offsets and video sync.");
 
 sealed class FragmentedStream(byte[] bytes) : MemoryStream(bytes)
 {
