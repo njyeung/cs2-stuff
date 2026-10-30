@@ -12,6 +12,7 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <EmbeddedResource Include="Media/voicetest.opus.bin" LogicalName="TheatreScreen.VoiceTest" />
     <PackageReference Include="CounterStrikeSharp.API" Version="$(CssApiVersion)">
       <Private>false</Private>
       <ExcludeAssets>runtime</ExcludeAssets>

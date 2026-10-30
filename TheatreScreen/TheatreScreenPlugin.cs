@@ -2,6 +2,7 @@ using System.Drawing;
 using CounterStrikeSharp.API;
 using CounterStrikeSharp.API.Core;
 using CounterStrikeSharp.API.Modules.Commands;
+using CounterStrikeSharp.API.Modules.Utils;
 using Microsoft.Extensions.Logging;
 
 namespace TheatreScreen;
@@ -10,7 +11,7 @@ namespace TheatreScreen;
 public sealed class TheatreScreenPlugin : BasePlugin, IPluginConfig<TheatreScreenConfig>
 {
     public override string ModuleName => "TheatreScreen";
-    public override string ModuleVersion => "0.5.2";
+    public override string ModuleVersion => "0.5.3";
     public override string ModuleAuthor => "cs2-server";
     public override string ModuleDescription => "Entity-pixel video screen rendered entirely server-side.";
 
@@ -18,6 +19,7 @@ public sealed class TheatreScreenPlugin : BasePlugin, IPluginConfig<TheatreScree
     private Screen? _screen;
     private VideoStream? _stream;
     private VideoFrame? _shownStreamFrame;
+    private VoiceTest? _voiceTest;
     private bool _loaded;
 
     public void OnConfigParsed(TheatreScreenConfig config) => Config = config;
@@ -39,6 +41,13 @@ public sealed class TheatreScreenPlugin : BasePlugin, IPluginConfig<TheatreScree
             return HookResult.Continue;
         });
         AddCommand("css_play", "Play a YouTube video on the screen: !play <url>", OnPlay);
+        _voiceTest = new VoiceTest(message =>
+        {
+            Logger.LogInformation("Voice test: {message}", message);
+            Server.PrintToChatAll($" [Screen] Voice test {message.Split('\n')[0]}");
+        });
+        RegisterListener<Listeners.OnTick>(_voiceTest.Tick);
+        AddCommand("css_screenvoicetest", "Experiment: send a 2 s Opus tone as voice data: [speaker slot] [packets per message]", OnVoiceTest);
         Logger.LogInformation("TheatreScreen {version} loaded; starting black, use !play <YouTube URL>. Feeder: {feeder}",
             ModuleVersion, Config.FeederUrl);
         Server.PrintToConsole($"[TheatreScreen] v{ModuleVersion} loaded. Use !play <YouTube URL>; feeder {Config.FeederUrl}");
@@ -54,6 +63,7 @@ public sealed class TheatreScreenPlugin : BasePlugin, IPluginConfig<TheatreScree
     public override void Unload(bool hotReload)
     {
         _loaded = false;
+        _voiceTest?.Stop();
         StopPlayback();
         ClearScreen();
     }
@@ -83,6 +93,36 @@ public sealed class TheatreScreenPlugin : BasePlugin, IPluginConfig<TheatreScree
         Logger.LogInformation("Playback requested by {player}: {url}", player?.PlayerName ?? "server console", sourceUrl);
         _stream = new VideoStream(endpoint!, message => Logger.LogInformation("Theatre feeder: {message}", message));
         info.ReplyToCommand(" [Screen] Loading video...");
+    }
+
+    private void OnVoiceTest(CCSPlayerController? player, CommandInfo info)
+    {
+        var humans = Utilities.GetPlayers().Where(p => p is { IsValid: true, IsBot: false }).ToList();
+        int speaker;
+        if (info.ArgCount > 1)
+        {
+            if (!int.TryParse(info.GetArg(1), out speaker))
+            {
+                info.ReplyToCommand(" [Screen] Usage: css_screenvoicetest [speaker slot] [packets per message]");
+                return;
+            }
+        }
+        else if (Utilities.GetPlayers().FirstOrDefault(p => p is { IsValid: true, IsBot: true }) is { } bot)
+            speaker = bot.Slot;
+        else if (player is { IsValid: true })
+            speaker = player.Slot;
+        else
+        {
+            info.ReplyToCommand(" [Screen] No speaker: add a bot or pass a slot.");
+            return;
+        }
+        var batch = info.ArgCount > 2 && int.TryParse(info.GetArg(2), out var n) ? n : 3;
+        var recipients = new RecipientFilter();
+        foreach (var human in humans)
+            recipients.Add(human);
+        var summary = _voiceTest!.Start(speaker, recipients, batch);
+        Logger.LogInformation("Voice test started by {player}: {summary}", player?.PlayerName ?? "server console", summary);
+        info.ReplyToCommand($" [Screen] Voice test: {summary}");
     }
 
     private void DrawVideoFrame()
