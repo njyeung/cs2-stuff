@@ -48,9 +48,10 @@ var listener = new TcpListener(IPAddress.Loopback, 0);
 listener.Start();
 var endpoint = new Uri($"http://127.0.0.1:{((IPEndPoint)listener.LocalEndpoint).Port}/stream");
 var reports = new ConcurrentQueue<string>();
+var requests = 0;
 var server = Task.Run(async () =>
 {
-    for (var connection = 0; connection < 2; connection++)
+    for (var connection = 0; connection < 3; connection++)
     {
         using var client = await listener.AcceptTcpClientAsync();
         await using var network = client.GetStream();
@@ -62,12 +63,20 @@ var server = Task.Run(async () =>
             if (request.Count >= 4 && Encoding.ASCII.GetString(request.ToArray()).EndsWith("\r\n\r\n")) break;
         }
         using var body = new MemoryStream();
-        body.Write(Header());
-        if (connection == 0)
-            for (var i = 0; i < 10; i++) body.Write([(byte)i, 0, 0, (byte)i, 0, 0]);
+        if (connection == 1)
+            body.Write(Encoding.UTF8.GetBytes("ERROR: This video is unavailable"));
         else
-            body.Write([200, 0, 0, 200, 0, 0, 255, 255, 255]); // One complete frame, one truncated.
-        await network.WriteAsync(Encoding.ASCII.GetBytes($"HTTP/1.1 200 OK\r\nContent-Length: {body.Length}\r\nConnection: close\r\n\r\n"));
+        {
+            body.Write(Header());
+            if (connection == 0)
+                for (var i = 0; i < 10; i++) body.Write([(byte)i, 0, 0, (byte)i, 0, 0]);
+            else
+                body.Write([200, 0, 0, 200, 0, 0, 255, 255, 255]); // One complete frame, one truncated.
+        }
+        Interlocked.Increment(ref requests);
+        var status = connection == 1 ? "502 Bad Gateway" : "200 OK";
+        // No Content-Length: match the real feeder's stream ending at connection close.
+        await network.WriteAsync(Encoding.ASCII.GetBytes($"HTTP/1.1 {status}\r\nConnection: close\r\n\r\n"));
         await network.WriteAsync(body.ToArray());
     }
 });
@@ -78,16 +87,37 @@ using (var receiver = new VideoStream(endpoint, reports.Enqueue))
     var red = receiver.Latest!.Pixel(0, 0, 2, 1).R;
     Check(red is >= 1 and <= 3, $"Producer was not paced: frame {red}");
     await Until(() => receiver.Latest!.Pixel(0, 0, 2, 1).R == 9, 3000, "VOD frames did not advance");
-    var old = receiver.Latest!;
-    await Until(() => !old.IsFresh, 4000, "Stale frame did not expire for fallback");
-    await Until(() => receiver.Latest!.Pixel(0, 0, 2, 1).R == 200, 5000, "EOF did not reconnect");
-    await Task.Delay(400);
-    Check(receiver.Latest!.Pixel(0, 0, 2, 1).R == 200, "Truncated frame was published");
+    await Until(() => receiver.Finished, 2000, "Clean EOF did not finish playback");
+    Check(receiver.Error == null, "Clean EOF was reported as an error");
+    await Task.Delay(300);
+    Check(requests == 1, "Video restarted automatically after EOF");
     receiver.Dispose(); // Double dispose must be safe.
+}
+using (var failed = new VideoStream(endpoint, reports.Enqueue))
+{
+    await Until(() => failed.Finished, 2000, "Feeder HTTP error did not finish playback");
+    Check(failed.Error?.Contains("502") == true && failed.Error.Contains("video is unavailable"), "Feeder error body was not preserved");
+    Check(failed.Latest == null, "HTTP error published a frame");
+}
+using (var truncated = new VideoStream(endpoint, reports.Enqueue))
+{
+    await Until(() => truncated.Finished, 2000, "Truncated frame did not stop playback");
+    Check(truncated.Error != null, "Truncated frame was not reported");
+    Check(truncated.Latest?.Pixel(0, 0, 2, 1).R == 200, "Truncated frame was published");
 }
 await server.WaitAsync(TimeSpan.FromSeconds(2));
 listener.Stop();
-Check(reports.Any(s => s.StartsWith("Feeder unavailable")), "Missing disconnect report");
+Check(reports.Any(s => s.StartsWith("Playback failed")), "Missing failure report");
+await Until(() => !pixel.IsFresh, 4000, "Stale frame did not expire");
+
+// The command accepts only YouTube URLs and escapes playlist query parameters.
+Check(PlaybackRequest.TryCreate("http://172.30.0.1:8787", "https://www.youtube.com/watch?v=abc&list=xyz", 64, 36, 15,
+    out var play, out _), "Valid YouTube URL rejected");
+Check(play!.Query.Contains("%26list%3Dxyz") && play.Query.EndsWith("&w=64&h=36&fps=15"), "Video URL or screen dimensions encoded incorrectly");
+foreach (var source in new[] { "file:///tmp/video", "https://youtube.com.attacker.test/watch", "https://youtube.com@attacker.test/", "hello" })
+    Check(!PlaybackRequest.TryCreate("http://localhost:8787", source, 64, 36, 15, out _, out _), "Invalid source accepted");
+Check(!PlaybackRequest.TryCreate("invalid", "https://youtu.be/abc", 64, 36, 15, out _, out _), "Invalid feeder accepted");
+Check(!PlaybackRequest.TryCreate("http://localhost:8787", "https://youtu.be/abc", 0, 36, 15, out _, out _), "Invalid dimensions accepted");
 
 // Cancellation must abort a pending HTTP response without blocking plugin unload.
 var stalled = new TcpListener(IPAddress.Loopback, 0);
@@ -102,7 +132,7 @@ using (var receiver = new VideoStream(new Uri($"http://127.0.0.1:{((IPEndPoint)s
     Check(await network.ReadAsync(buffer).AsTask().WaitAsync(TimeSpan.FromSeconds(2)) == 0, "Dispose left HTTP request open");
 }
 stalled.Stop();
-Console.WriteLine("PASS: fragmented/invalid headers, RGB sampling, HTTP pacing, stale-frame fallback, EOF reconnect, truncated frames, and cancellation.");
+Console.WriteLine("PASS: stream pacing, clean EOF without looping, feeder error messages, truncated frames, cancellation, headers, RGB sampling, and YouTube command URLs.");
 
 sealed class FragmentedStream(byte[] bytes) : MemoryStream(bytes)
 {

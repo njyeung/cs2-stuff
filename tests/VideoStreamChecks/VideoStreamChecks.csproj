@@ -7,5 +7,6 @@
   </PropertyGroup>
   <ItemGroup>
     <Compile Include="../../TheatreScreen/VideoStream.cs" Link="VideoStream.cs" />
+    <Compile Include="../../TheatreScreen/PlaybackRequest.cs" Link="PlaybackRequest.cs" />
   </ItemGroup>
 </Project>

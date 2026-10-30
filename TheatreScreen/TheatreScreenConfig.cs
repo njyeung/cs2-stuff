@@ -31,9 +31,9 @@ public sealed class TheatreScreenConfig : BasePluginConfig
     [JsonPropertyName("Columns")] public int Columns { get; set; } = 96;
     [JsonPropertyName("Rows")] public int Rows { get; set; } = 54;
 
-    /// <summary>Full HTTP(S) feeder endpoint, including the escaped video URL and w/h/fps.
-    /// Empty keeps the embedded loop. The address must be reachable from the container.</summary>
-    [JsonPropertyName("VideoStreamUrl")] public string VideoStreamUrl { get; set; } = "";
+    /// <summary>Feeder base URL reachable from the game container; !play supplies the video URL.</summary>
+    [JsonPropertyName("FeederUrl")] public string FeederUrl { get; set; } = "http://172.30.0.1:8787";
+    [JsonPropertyName("FramesPerSecond")] public int FramesPerSecond { get; set; } = 15;
 
     /// <summary>Black wall behind the pixels, overhanging by <see cref="Bezel"/> units.
     /// Beams are additive, so without it they look like tinted glass.</summary>

@@ -1,49 +1,36 @@
-using System.Diagnostics;
+using System.Drawing;
+using CounterStrikeSharp.API;
 using CounterStrikeSharp.API.Core;
+using CounterStrikeSharp.API.Modules.Commands;
 using Microsoft.Extensions.Logging;
 
 namespace TheatreScreen;
 
-/// <summary>
-/// Server-side "theatre screen": a wall of stock entities used as pixels, so clients
-/// need no downloads. The screen is always up — rebuilt every round start, since the
-/// round's map cleanup wipes plugin-spawned entities. Embedded video loops at 15 FPS.
-/// </summary>
+/// <summary>A black screen until a player requests a video with !play.</summary>
 public sealed class TheatreScreenPlugin : BasePlugin, IPluginConfig<TheatreScreenConfig>
 {
     public override string ModuleName => "TheatreScreen";
-    public override string ModuleVersion => "0.4.0";
+    public override string ModuleVersion => "0.5.0";
     public override string ModuleAuthor => "cs2-server";
-    public override string ModuleDescription => "Entity-pixel screen rendered entirely server-side.";
+    public override string ModuleDescription => "Entity-pixel video screen rendered entirely server-side.";
 
     public TheatreScreenConfig Config { get; set; } = new();
     private Screen? _screen;
-    private readonly VideoClip _video = new();
-    private readonly Stopwatch _playback = new();
-    private int _shownFrame = -1;
     private VideoStream? _stream;
     private VideoFrame? _shownStreamFrame;
+    private bool _loaded;
 
     public void OnConfigParsed(TheatreScreenConfig config) => Config = config;
 
     public override void Load(bool hotReload)
     {
-        if (!string.IsNullOrWhiteSpace(Config.VideoStreamUrl))
-        {
-            if (!Uri.TryCreate(Config.VideoStreamUrl, UriKind.Absolute, out var endpoint) ||
-                endpoint.Scheme is not ("http" or "https"))
-                throw new InvalidOperationException("VideoStreamUrl must be an absolute HTTP(S) URL.");
-            _stream = new VideoStream(endpoint, message => Logger.LogInformation("{message}", message));
-        }
-        // Precache only runs on map load — after the first hot-load, change map before
-        // the backdrop's cube model will show.
+        _loaded = true;
         RegisterListener<Listeners.OnServerPrecacheResources>(manifest => manifest.AddResource(Backdrop.Model));
-        // The map change already destroyed the entities; just forget them.
         RegisterListener<Listeners.OnMapStart>(_ =>
         {
-            _screen = null;
-            _playback.Reset();
-            _shownFrame = -1;
+            StopPlayback();
+            _screen = null; // Map change already removed the old entities.
+            QueueScreen();
         });
         RegisterListener<Listeners.OnTick>(DrawVideoFrame);
         RegisterEventHandler<EventRoundStart>((_, _) =>
@@ -51,60 +38,113 @@ public sealed class TheatreScreenPlugin : BasePlugin, IPluginConfig<TheatreScree
             SpawnScreen();
             return HookResult.Continue;
         });
-
-        if (hotReload)
-            SpawnScreen();
+        AddCommand("css_play", "Play a YouTube video on the screen: !play <url>", OnPlay);
+        Logger.LogInformation("TheatreScreen {version} loaded; starting black, use !play <YouTube URL>. Feeder: {feeder}",
+            ModuleVersion, Config.FeederUrl);
+        Server.PrintToConsole($"[TheatreScreen] v{ModuleVersion} loaded. Use !play <YouTube URL>; feeder {Config.FeederUrl}");
+        QueueScreen(); // Also spawn when loaded mid-round, without waiting for round_start.
     }
+
+    private void QueueScreen() => Server.NextWorldUpdate(() =>
+    {
+        if (_loaded)
+            SpawnScreen();
+    });
 
     public override void Unload(bool hotReload)
     {
-        _stream?.Dispose();
-        _stream = null;
+        _loaded = false;
+        StopPlayback();
         ClearScreen();
+    }
+
+    private void OnPlay(CCSPlayerController? player, CommandInfo info)
+    {
+        if (info.ArgCount != 2)
+        {
+            info.ReplyToCommand(" [Screen] Usage: !play <YouTube URL>");
+            return;
+        }
+        if (!PlaybackRequest.TryCreate(Config.FeederUrl, info.GetArg(1), Config.Columns, Config.Rows,
+                Config.FramesPerSecond, out var endpoint, out var error))
+        {
+            info.ReplyToCommand($" [Screen] {error}");
+            return;
+        }
+        if (_screen == null && !SpawnScreen())
+        {
+            info.ReplyToCommand(" [Screen] Could not create the screen. Check the TheatreScreen server log.");
+            return;
+        }
+        StopPlayback();
+        ShowBlack();
+        Logger.LogInformation("Playback requested by {player}: {url}", player?.PlayerName ?? "server console", info.GetArg(1));
+        _stream = new VideoStream(endpoint!, message => Logger.LogInformation("Theatre feeder: {message}", message));
+        info.ReplyToCommand(" [Screen] Loading video...");
     }
 
     private void DrawVideoFrame()
     {
+        if (_stream is not { } stream)
+            return;
+        if (stream.Finished)
+        {
+            var error = stream.Error;
+            StopPlayback();
+            ShowBlack();
+            var summary = error is { Length: > 180 } ? error[..180] + "... (see server log)" : error;
+            Server.PrintToChatAll(error == null ? " [Screen] Video finished." : $" [Screen] Playback failed: {summary}");
+            return;
+        }
         if (_screen is not { } screen)
             return;
-        if (_stream?.Latest is { IsFresh: true } received)
+        if (stream.Latest is { IsFresh: true } received)
         {
             if (!ReferenceEquals(received, _shownStreamFrame))
             {
                 screen.Draw((col, row) => received.Pixel(col, row, screen.Columns, screen.Rows));
                 _shownStreamFrame = received;
-                _shownFrame = -1;
             }
-            return;
         }
-        _shownStreamFrame = null;
-        // Skip missed frames instead of queuing work when a server tick runs late.
-        var frame = (int)((long)(_playback.Elapsed.TotalSeconds * _video.FramesPerSecond) % _video.FrameCount);
-        if (frame == _shownFrame)
-            return;
-        screen.Draw((col, row) => _video.Pixel(frame, col, row, screen.Columns, screen.Rows));
-        _shownFrame = frame;
+        else if (_shownStreamFrame != null)
+            ShowBlack();
     }
 
-    private void SpawnScreen()
+    private bool SpawnScreen()
     {
         ClearScreen();
-        _screen = new Screen(Config, (col, row) => _video.Pixel(0, col, row, Config.Columns, Config.Rows));
-        _shownFrame = 0;
-        _playback.Restart();
-        Logger.LogInformation("Spawned {cols}x{rows} {type} screen", _screen.Columns, _screen.Rows, Config.PixelType);
-        if (_screen.Backdrop is { } backdrop)
-            Logger.LogInformation("Backdrop: {count} blocks, cube bounds {mins} .. {maxs}",
-                backdrop.BlockCount, backdrop.BlockBounds.Mins, backdrop.BlockBounds.Maxs);
+        try
+        {
+            _screen = new Screen(Config, (_, _) => Color.Black);
+            Logger.LogInformation("Spawned black {cols}x{rows} screen; backdrop blocks: {blocks}",
+                _screen.Columns, _screen.Rows, _screen.Backdrop?.BlockCount ?? 0);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Could not spawn theatre screen");
+            Server.PrintToConsole($"[TheatreScreen] Screen creation failed: {ex.Message}");
+            return false;
+        }
+    }
+
+    private void ShowBlack()
+    {
+        _screen?.Draw((_, _) => Color.Black);
+        _shownStreamFrame = null;
+    }
+
+    private void StopPlayback()
+    {
+        _stream?.Dispose();
+        _stream = null;
+        _shownStreamFrame = null;
     }
 
     private void ClearScreen()
     {
         _screen?.Remove();
         _screen = null;
-        _playback.Reset();
-        _shownFrame = -1;
         _shownStreamFrame = null;
     }
-
 }

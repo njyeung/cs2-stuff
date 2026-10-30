@@ -13,8 +13,11 @@ public sealed class VideoStream : IDisposable
     private readonly Task _receiver;
     private VideoFrame? _latest;
     private int _disposed;
+    private string? _error;
 
     public VideoFrame? Latest => Volatile.Read(ref _latest);
+    public bool Finished => _receiver.IsCompleted;
+    public string? Error => Volatile.Read(ref _error);
 
     public VideoStream(Uri endpoint, Action<string> report)
     {
@@ -23,40 +26,53 @@ public sealed class VideoStream : IDisposable
 
     private async Task ReceiveLoop(Uri endpoint, Action<string> report, CancellationToken stop)
     {
-        while (!stop.IsCancellationRequested)
+        try
         {
-            try
+            using var opening = CancellationTokenSource.CreateLinkedTokenSource(stop);
+            opening.CancelAfter(TimeSpan.FromSeconds(60));
+            using var response = await _http.GetAsync(endpoint, HttpCompletionOption.ResponseHeadersRead, opening.Token);
+            if (!response.IsSuccessStatusCode)
             {
-                // URL resolution and first-frame decoding can take time at the feeder.
-                using var opening = CancellationTokenSource.CreateLinkedTokenSource(stop);
-                opening.CancelAfter(TimeSpan.FromSeconds(60));
-                using var response = await _http.GetAsync(endpoint, HttpCompletionOption.ResponseHeadersRead, opening.Token);
-                response.EnsureSuccessStatusCode();
-                await using var body = await response.Content.ReadAsStreamAsync(stop);
-                var header = await VideoStreamHeader.ReadAsync(body, stop);
-                report($"Connected to feeder: {header.Width}x{header.Height} at {header.Fps} FPS");
-                var clock = Stopwatch.StartNew();
-                var due = 0d;
-                for (var index = 0; header.FrameCount == 0 || index < header.FrameCount; index++)
+                using var reading = CancellationTokenSource.CreateLinkedTokenSource(stop);
+                reading.CancelAfter(TimeSpan.FromSeconds(10));
+                using var reader = new StreamReader(await response.Content.ReadAsStreamAsync(stop));
+                var text = new char[1024];
+                var count = await reader.ReadAsync(text, reading.Token);
+                var message = new string(text, 0, count).Replace('\r', ' ').Replace('\n', ' ').Trim();
+                throw new HttpRequestException($"Feeder HTTP {(int)response.StatusCode}: {message}");
+            }
+            await using var body = await response.Content.ReadAsStreamAsync(stop);
+            var header = await VideoStreamHeader.ReadAsync(body, stop);
+            report($"Connected: {header.Width}x{header.Height} at {header.Fps} FPS");
+            var clock = Stopwatch.StartNew();
+            var due = 0d;
+            for (var index = 0; header.FrameCount == 0 || index < header.FrameCount; index++)
+            {
+                var delay = due - clock.Elapsed.TotalSeconds;
+                if (delay > 0)
+                    await Task.Delay(TimeSpan.FromSeconds(delay), stop);
+                var rgb = new byte[header.Width * header.Height * 3];
+                using var reading = CancellationTokenSource.CreateLinkedTokenSource(stop);
+                reading.CancelAfter(TimeSpan.FromSeconds(10));
+                var first = await body.ReadAsync(rgb, reading.Token);
+                if (first == 0)
                 {
-                    var delay = due - clock.Elapsed.TotalSeconds;
-                    if (delay > 0)
-                        await Task.Delay(TimeSpan.FromSeconds(delay), stop);
-                    var rgb = new byte[header.Width * header.Height * 3];
-                    await ReadWithTimeout(body, rgb, stop);
-                    Volatile.Write(ref _latest, new VideoFrame(header.Width, header.Height, rgb));
-                    // The feeder relies on client pacing: don't drain VODs at decode speed.
-                    due = Math.Max(due + 1d / header.Fps, clock.Elapsed.TotalSeconds);
+                    if (header.FrameCount > 0)
+                        throw new EndOfStreamException("Feeder ended before the advertised frame count.");
+                    break; // Clean EOF at a frame boundary means the video finished.
                 }
+                await body.ReadExactlyAsync(rgb.AsMemory(first), reading.Token);
+                Volatile.Write(ref _latest, new VideoFrame(header.Width, header.Height, rgb));
+                // Client pacing prevents downloading a whole VOD at decode speed.
+                due = Math.Max(due + 1d / header.Fps, clock.Elapsed.TotalSeconds);
             }
-            catch (OperationCanceledException) when (stop.IsCancellationRequested) { break; }
-            catch (Exception ex) when (ex is HttpRequestException or IOException or InvalidDataException or OperationCanceledException)
-            {
-                report($"Feeder unavailable ({ex.GetType().Name}); retrying in 5 seconds");
-            }
-
-            try { await Task.Delay(TimeSpan.FromSeconds(5), stop); }
-            catch (OperationCanceledException) { break; }
+            report("Video finished; returning to black.");
+        }
+        catch (OperationCanceledException) when (stop.IsCancellationRequested) { }
+        catch (Exception ex) when (ex is HttpRequestException or IOException or InvalidDataException or OperationCanceledException)
+        {
+            Volatile.Write(ref _error, ex is OperationCanceledException ? "Feeder timed out." : ex.Message);
+            report($"Playback failed: {Error}");
         }
     }
 
