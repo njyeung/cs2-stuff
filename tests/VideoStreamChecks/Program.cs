@@ -111,6 +111,19 @@ Check(reports.Any(s => s.StartsWith("Playback failed")), "Missing failure report
 await Until(() => !pixel.IsFresh, 4000, "Stale frame did not expire");
 
 // The command accepts only YouTube URLs and escapes playlist query parameters.
+foreach (var url in new[] { "https://www.youtube.com/watch?v=aRiVUVNUhls", "https://youtu.be/aRiVUVNUhls?si=wuUOB65R6J6Viwl", "https://www.youtube.com/watch?v=abc&list=xyz" })
+{
+    foreach (var arguments in new[] { url, $"  {url}  ", $"\"{url}\"", $"“{url}”" })
+    {
+        Check(PlaybackRequest.TryReadArgument(arguments, out var parsed) && parsed == url,
+            "Pasted URL punctuation/query/quotes were not preserved");
+        Check(PlaybackRequest.TryCreate("http://localhost:8787", parsed, 64, 36, 15, out var built, out _),
+            "Pasted chat URL was rejected");
+        Check(Uri.UnescapeDataString(built!.Query.Split('&')[0][5..]) == url, "Pasted URL changed before reaching feeder");
+    }
+}
+foreach (var arguments in new[] { "", "   ", "\"\"", "https://youtu.be/abc extra words" })
+    Check(!PlaybackRequest.TryReadArgument(arguments, out _), "Missing or extra command arguments accepted");
 Check(PlaybackRequest.TryCreate("http://172.30.0.1:8787", "https://www.youtube.com/watch?v=abc&list=xyz", 64, 36, 15,
     out var play, out _), "Valid YouTube URL rejected");
 Check(play!.Query.Contains("%26list%3Dxyz") && play.Query.EndsWith("&w=64&h=36&fps=15"), "Video URL or screen dimensions encoded incorrectly");

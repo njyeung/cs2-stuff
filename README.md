@@ -27,6 +27,9 @@ Configure these keys in the plugin JSON or csfleet TOML template, then restart:
 The bridge gateway is reachable from game containers; `localhost` would point at
 the game container instead of the VM. `VideoStreamUrl` from build-4 is no longer
 used. Quote YouTube URLs containing `&` when invoking `css_play` in the console.
+Unquoted URLs pasted in chat are accepted without relying on the engine's argument
+count. For long links, use the console command: CS2 chat can truncate the message
+before the plugin receives it. A short `https://youtu.be/VIDEO_ID` link also works.
 
 The plugin reads HTTP on a background task, paced at the advertised FPS because
 the feeder relies on TCP backpressure. Only the latest complete frame is retained;
@@ -42,7 +45,7 @@ The plugin queues a black screen on load and map start and rebuilds after round
 cleanup. Keep `Backdrop` enabled because black beam pixels alone are transparent.
 The cube model is precached during map loading: after installing a new plugin,
 restart the server or change the map to ensure the black backdrop is available.
-Look for `[TheatreScreen] v0.5.0 loaded` in the server console and `Spawned black`
+Look for `[TheatreScreen] v0.5.1 loaded` in the server console and `Spawned black`
 in the plugin log. Invalid JSON (including an extra quote on a key) prevents the
 plugin from loading at all; validate the JSON inside the TOML template too.
 

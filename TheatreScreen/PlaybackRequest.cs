@@ -2,6 +2,12 @@ namespace TheatreScreen;
 
 public static class PlaybackRequest
 {
+    public static bool TryReadArgument(string arguments, out string sourceUrl)
+    {
+        sourceUrl = arguments.Trim().Trim('"', '\'', '“', '”').Trim();
+        return sourceUrl.Length > 0 && !sourceUrl.Any(char.IsWhiteSpace);
+    }
+
     public static bool TryCreate(string feederUrl, string sourceUrl, int width, int height, int fps,
         out Uri? endpoint, out string error)
     {

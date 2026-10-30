@@ -10,7 +10,7 @@ namespace TheatreScreen;
 public sealed class TheatreScreenPlugin : BasePlugin, IPluginConfig<TheatreScreenConfig>
 {
     public override string ModuleName => "TheatreScreen";
-    public override string ModuleVersion => "0.5.0";
+    public override string ModuleVersion => "0.5.1";
     public override string ModuleAuthor => "cs2-server";
     public override string ModuleDescription => "Entity-pixel video screen rendered entirely server-side.";
 
@@ -60,12 +60,14 @@ public sealed class TheatreScreenPlugin : BasePlugin, IPluginConfig<TheatreScree
 
     private void OnPlay(CCSPlayerController? player, CommandInfo info)
     {
-        if (info.ArgCount != 2)
+        // Source's command tokenizer may split punctuation in an unquoted URL.
+        // ArgString retains the original text after the command, including its query.
+        if (!PlaybackRequest.TryReadArgument(info.ArgString, out var sourceUrl))
         {
-            info.ReplyToCommand(" [Screen] Usage: !play <YouTube URL>");
+            info.ReplyToCommand(" [Screen] Usage: !play <YouTube URL>. For long links, use console: css_play \"URL\"");
             return;
         }
-        if (!PlaybackRequest.TryCreate(Config.FeederUrl, info.GetArg(1), Config.Columns, Config.Rows,
+        if (!PlaybackRequest.TryCreate(Config.FeederUrl, sourceUrl, Config.Columns, Config.Rows,
                 Config.FramesPerSecond, out var endpoint, out var error))
         {
             info.ReplyToCommand($" [Screen] {error}");
@@ -78,7 +80,7 @@ public sealed class TheatreScreenPlugin : BasePlugin, IPluginConfig<TheatreScree
         }
         StopPlayback();
         ShowBlack();
-        Logger.LogInformation("Playback requested by {player}: {url}", player?.PlayerName ?? "server console", info.GetArg(1));
+        Logger.LogInformation("Playback requested by {player}: {url}", player?.PlayerName ?? "server console", sourceUrl);
         _stream = new VideoStream(endpoint!, message => Logger.LogInformation("Theatre feeder: {message}", message));
         info.ReplyToCommand(" [Screen] Loading video...");
     }
