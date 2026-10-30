@@ -15,6 +15,7 @@ public sealed class Screen
 
     private readonly IScreenPixel[] _pixels;
     private readonly Color[] _shown;
+    public Backdrop? Backdrop { get; }
 
     public Screen(TheatreScreenConfig config, Func<int, int, Color> image)
     {
@@ -28,6 +29,13 @@ public sealed class Screen
         var step = across / Columns;
         var up = Vector3.UnitZ * pixelSize;
         var bottom = left + Vector3.UnitZ * config.Elevation;
+
+        if (config.Backdrop)
+        {
+            var yaw = config.FacingYaw * MathF.PI / 180f;
+            var facing = new Vector3(MathF.Cos(yaw), MathF.Sin(yaw), 0);
+            Backdrop = new Backdrop(bottom, across, pixelSize * Rows, facing, config.Bezel, gap: pixelSize);
+        }
 
         _pixels = new IScreenPixel[Columns * Rows];
         _shown = new Color[Columns * Rows];
@@ -66,6 +74,7 @@ public sealed class Screen
     {
         foreach (var pixel in _pixels)
             pixel.Remove();
+        Backdrop?.Remove();
     }
 
     private int Index(int col, int row) => row * Columns + col;

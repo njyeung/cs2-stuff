@@ -12,6 +12,7 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <EmbeddedResource Include="Media/rickroll.rgb.gz" LogicalName="TheatreScreen.Rickroll" />
     <PackageReference Include="CounterStrikeSharp.API" Version="$(CssApiVersion)">
       <Private>false</Private>
       <ExcludeAssets>runtime</ExcludeAssets>

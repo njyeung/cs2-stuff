@@ -31,6 +31,11 @@ public sealed class TheatreScreenConfig : BasePluginConfig
     [JsonPropertyName("Columns")] public int Columns { get; set; } = 64;
     [JsonPropertyName("Rows")] public int Rows { get; set; } = 36;
 
+    /// <summary>Black wall behind the pixels, overhanging by <see cref="Bezel"/> units.
+    /// Beams are additive, so without it they look like tinted glass.</summary>
+    [JsonPropertyName("Backdrop")] public bool Backdrop { get; set; } = true;
+    [JsonPropertyName("Bezel")] public float Bezel { get; set; } = 4f;
+
     /// <summary>Pixel primitive: "beam" or "text". See docs in ScreenPixels.cs.</summary>
     [JsonPropertyName("PixelType")] public string PixelType { get; set; } = "beam";
 
