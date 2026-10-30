@@ -1,0 +1,26 @@
+[source]
+type = "github_release"
+repo = "njyeung/cs2-stuff"
+asset = '^TheatreScreen\.zip$'
+version = "latest"
+
+[[layout]]
+from = "TheatreScreen"
+to = "addons/counterstrikesharp/plugins/TheatreScreen"
+
+[[template]]
+path = "addons/counterstrikesharp/configs/plugins/TheatreScreen/TheatreScreen.json"
+body = '''
+{
+  "BottomLeft": [1023.92, -2465.0, -176.0],
+  "BottomRight": [860.16, -2465.0, -176.0],
+  "FacingYaw": 90.0,
+  "Elevation": 24.0,
+  "Columns": 64,
+  "Rows": 36,
+  "PixelType": "beam",
+  "TextGlyph": "█",
+  "TextScale": 1.0,
+  "ConfigVersion": 1
+}
+'''

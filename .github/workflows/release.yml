@@ -1,0 +1,45 @@
+name: release
+
+# Every push publishes TheatreScreen.zip. Main builds become the latest release;
+# other branches overwrite a prerelease tagged with the branch name.
+on:
+  push:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Build
+        run: |
+          dotnet publish TheatreScreen/TheatreScreen.csproj -c Release -o out/TheatreScreen
+          cd out && zip -r TheatreScreen.zip TheatreScreen
+
+      - name: Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BRANCH: ${{ github.ref_name }}
+        run: |
+          if [ "$BRANCH" = main ]; then
+            gh release create "build-${{ github.run_number }}" out/TheatreScreen.zip \
+              --target "${{ github.sha }}" \
+              --title "build ${{ github.run_number }}" \
+              --notes "Built from ${{ github.sha }}" \
+              --latest
+          else
+            gh release delete "$BRANCH" --cleanup-tag --yes || true
+            gh release create "$BRANCH" out/TheatreScreen.zip \
+              --target "${{ github.sha }}" \
+              --title "$BRANCH (branch build)" \
+              --notes "Built from ${{ github.sha }} on $BRANCH" \
+              --prerelease --latest=false
+          fi

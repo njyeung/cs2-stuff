@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <LangVersion>latest</LangVersion>
+    <AssemblyName>TheatreScreen</AssemblyName>
+    <RootNamespace>TheatreScreen</RootNamespace>
+    <EnableDynamicLoading>true</EnableDynamicLoading>
+    <CssApiVersion Condition="'$(CssApiVersion)' == ''">1.0.378</CssApiVersion>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="CounterStrikeSharp.API" Version="$(CssApiVersion)">
+      <Private>false</Private>
+      <ExcludeAssets>runtime</ExcludeAssets>
+    </PackageReference>
+  </ItemGroup>
+
+</Project>
