@@ -18,6 +18,7 @@ body = '''
   "Elevation": 24.0,
   "Columns": 96,
   "Rows": 54,
+  "VideoStreamUrl": "",
   "PixelType": "beam",
   "TextGlyph": "█",
   "TextScale": 1.0,

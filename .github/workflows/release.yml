@@ -19,6 +19,9 @@ jobs:
         with:
           dotnet-version: 10.0.x
 
+      - name: Check stream protocol
+        run: dotnet run --project tests/VideoStreamChecks -c Release
+
       - name: Build
         run: |
           dotnet publish TheatreScreen/TheatreScreen.csproj -c Release -o out/TheatreScreen

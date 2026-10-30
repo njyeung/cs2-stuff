@@ -12,7 +12,7 @@ namespace TheatreScreen;
 public sealed class TheatreScreenPlugin : BasePlugin, IPluginConfig<TheatreScreenConfig>
 {
     public override string ModuleName => "TheatreScreen";
-    public override string ModuleVersion => "0.3.0";
+    public override string ModuleVersion => "0.4.0";
     public override string ModuleAuthor => "cs2-server";
     public override string ModuleDescription => "Entity-pixel screen rendered entirely server-side.";
 
@@ -21,11 +21,20 @@ public sealed class TheatreScreenPlugin : BasePlugin, IPluginConfig<TheatreScree
     private readonly VideoClip _video = new();
     private readonly Stopwatch _playback = new();
     private int _shownFrame = -1;
+    private VideoStream? _stream;
+    private VideoFrame? _shownStreamFrame;
 
     public void OnConfigParsed(TheatreScreenConfig config) => Config = config;
 
     public override void Load(bool hotReload)
     {
+        if (!string.IsNullOrWhiteSpace(Config.VideoStreamUrl))
+        {
+            if (!Uri.TryCreate(Config.VideoStreamUrl, UriKind.Absolute, out var endpoint) ||
+                endpoint.Scheme is not ("http" or "https"))
+                throw new InvalidOperationException("VideoStreamUrl must be an absolute HTTP(S) URL.");
+            _stream = new VideoStream(endpoint, message => Logger.LogInformation("{message}", message));
+        }
         // Precache only runs on map load — after the first hot-load, change map before
         // the backdrop's cube model will show.
         RegisterListener<Listeners.OnServerPrecacheResources>(manifest => manifest.AddResource(Backdrop.Model));
@@ -47,12 +56,28 @@ public sealed class TheatreScreenPlugin : BasePlugin, IPluginConfig<TheatreScree
             SpawnScreen();
     }
 
-    public override void Unload(bool hotReload) => ClearScreen();
+    public override void Unload(bool hotReload)
+    {
+        _stream?.Dispose();
+        _stream = null;
+        ClearScreen();
+    }
 
     private void DrawVideoFrame()
     {
         if (_screen is not { } screen)
             return;
+        if (_stream?.Latest is { IsFresh: true } received)
+        {
+            if (!ReferenceEquals(received, _shownStreamFrame))
+            {
+                screen.Draw((col, row) => received.Pixel(col, row, screen.Columns, screen.Rows));
+                _shownStreamFrame = received;
+                _shownFrame = -1;
+            }
+            return;
+        }
+        _shownStreamFrame = null;
         // Skip missed frames instead of queuing work when a server tick runs late.
         var frame = (int)((long)(_playback.Elapsed.TotalSeconds * _video.FramesPerSecond) % _video.FrameCount);
         if (frame == _shownFrame)
@@ -79,6 +104,7 @@ public sealed class TheatreScreenPlugin : BasePlugin, IPluginConfig<TheatreScree
         _screen = null;
         _playback.Reset();
         _shownFrame = -1;
+        _shownStreamFrame = null;
     }
 
 }
