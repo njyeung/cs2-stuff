@@ -10,7 +10,6 @@ not implemented. Videos never start automatically from configuration.
 
 GitHub Actions publishes `TheatreScreen.zip`. Use `theatrescreen.toml` with csfleet
 to install the latest release. CounterStrikeSharp must already be installed.
-The original converted Rickroll asset remains embedded but is not played.
 
 ### Feeder playback
 
@@ -45,7 +44,7 @@ The plugin queues a black screen on load and map start and rebuilds after round
 cleanup. Keep `Backdrop` enabled because black beam pixels alone are transparent.
 The cube model is precached during map loading: after installing a new plugin,
 restart the server or change the map to ensure the black backdrop is available.
-Look for `[TheatreScreen] v0.5.1 loaded` in the server console and `Spawned black`
+Look for `[TheatreScreen] v0.5.2 loaded` in the server console and `Spawned black`
 in the plugin log. Invalid JSON (including an extra quote on a key) prevents the
 plugin from loading at all; validate the JSON inside the TOML template too.
 
@@ -53,7 +52,7 @@ Wire format: one 20-byte header (`TSV1`, then four little-endian signed int32 va
 width, height, FPS, frame count), followed by tightly packed RGB24 frames in row-major
 order from top left. Frame count `0` means unknown/live; positive counts describe a
 finite response. Width and height must each be 1–256, FPS 1–30. The HTTP body is
-uncompressed (the embedded asset's gzip wrapper is not used on the network).
+uncompressed.
 Frames have no timestamps or per-frame headers. Each request starts at a fresh
 header; EOF closes that session without replaying it. Audio is not part of this protocol.
 
@@ -62,15 +61,6 @@ header; EOF closes that session without replaying it. Audio is not part of this 
 ```sh
 dotnet publish TheatreScreen/TheatreScreen.csproj -c Release -o out/TheatreScreen
 ```
-
-The converted frames are committed. To replace or regenerate them, put the source
-clip at `rickroll.webm` and run the following with Python 3 and FFmpeg installed:
-
-```sh
-python3 tools/encode-video.py
-```
-
-Changing the encoded dimensions or frame rate also requires updating `VideoClip`.
 
 Run the stream protocol and HTTP lifecycle checks with:
 

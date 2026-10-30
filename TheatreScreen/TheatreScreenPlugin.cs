@@ -10,7 +10,7 @@ namespace TheatreScreen;
 public sealed class TheatreScreenPlugin : BasePlugin, IPluginConfig<TheatreScreenConfig>
 {
     public override string ModuleName => "TheatreScreen";
-    public override string ModuleVersion => "0.5.1";
+    public override string ModuleVersion => "0.5.2";
     public override string ModuleAuthor => "cs2-server";
     public override string ModuleDescription => "Entity-pixel video screen rendered entirely server-side.";
 
