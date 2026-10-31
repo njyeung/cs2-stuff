@@ -7,9 +7,10 @@ A CounterStrikeSharp plugin with a black screen on startup. Anyone can type
 console equivalent is `css_play <YouTube/Twitch URL>`. Each request replaces the previous
 video and plays once; completion or failure returns the screen to black. Audio
 plays through our TheatreVoice Metamod plugin using the voice channel.
-A bot must be present as the speaker. `!screenmute` toggles audio for the player
+A bot must be present as the speaker. `!mute` toggles audio for the player
 who runs it; everyone else continues hearing it. Videos never start automatically
-from configuration.
+from configuration. Anyone can use `!stop` to stop playback for everyone and return
+the screen to black. The console equivalents are `css_mute` and `css_stop`.
 
 GitHub Actions publishes `TheatreScreen.zip`. Use `theatrescreen.toml` with csfleet
 to install the latest release. CounterStrikeSharp must already be installed.

@@ -51,7 +51,13 @@ public sealed class TheatreScreenPlugin : BasePlugin, IPluginConfig<TheatreScree
             return HookResult.Continue;
         });
         AddCommand("css_play", "Play a YouTube or Twitch video on the screen: !play <url>", OnPlay);
-        AddCommand("css_screenmute", "Toggle screen audio for yourself", (player, info) =>
+        AddCommand("css_stop", "Stop the current video and return the screen to black", (_, info) =>
+        {
+            StopPlayback();
+            ShowBlack();
+            info.ReplyToCommand(" [Screen] Playback stopped.");
+        });
+        AddCommand("css_mute", "Toggle screen audio for yourself", (player, info) =>
         {
             if (player is not { IsValid: true, IsBot: false } || player.Slot is < 0 or >= 64) return;
             _muted ^= 1UL << player.Slot;
